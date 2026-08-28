@@ -865,6 +865,84 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.usageLimitResume?.nextAttemptAt).not.toBeNull();
   });
 
+  effectIt.effect("ignores an automatic-resume failure superseded by newer work", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-1");
+      const newerTurnId = asTurnId("turn-newer-work");
+      let harness: Awaited<ReturnType<typeof createHarness>>;
+      harness = yield* Effect.promise(() =>
+        createHarness({
+          sendTurnEffect: () =>
+            Effect.gen(function* () {
+              yield* harness.engine
+                .dispatch({
+                  type: "thread.usage-limit-resume.cancel",
+                  commandId: CommandId.make("cmd-cancel-superseded-resume"),
+                  threadId,
+                })
+                .pipe(Effect.orDie);
+              yield* harness.engine
+                .dispatch({
+                  type: "thread.session.set",
+                  commandId: CommandId.make("cmd-session-set-newer-work"),
+                  threadId,
+                  session: {
+                    threadId,
+                    status: "running",
+                    providerName: "codex",
+                    runtimeMode: "approval-required",
+                    activeTurnId: newerTurnId,
+                    lastError: null,
+                    updatedAt: "2026-01-01T00:00:02.000Z",
+                  },
+                  createdAt: "2026-01-01T00:00:02.000Z",
+                })
+                .pipe(Effect.orDie);
+              return yield* new ProviderAdapterRequestError({
+                provider: "codex",
+                method: "thread.turn.start",
+                detail: "stale automatic-resume failure",
+              });
+            }),
+        }),
+      );
+      const resumeAt = "2099-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.schedule",
+        commandId: CommandId.make("cmd-superseded-resume-schedule"),
+        threadId,
+        resumeAt,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.attempt",
+        commandId: CommandId.make("cmd-superseded-resume-attempt"),
+        threadId,
+        expectedAttemptAt: resumeAt,
+        createdAt: resumeAt,
+      });
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+          return thread?.usageLimitResume === null && thread.session?.activeTurnId === newerTurnId;
+        }),
+      );
+      yield* Effect.promise(() => harness.drain());
+
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      expect(thread?.usageLimitResume).toBeNull();
+      expect(thread?.session).toMatchObject({
+        status: "running",
+        activeTurnId: newerTurnId,
+        lastError: null,
+      });
+      expect(
+        thread?.activities.some((activity) => activity.summary === "Automatic resume failed"),
+      ).toBe(false);
+    }),
+  );
+
   effectIt.effect(
     "advances the durable retry after reporting and transition dispatch failures",
     () =>

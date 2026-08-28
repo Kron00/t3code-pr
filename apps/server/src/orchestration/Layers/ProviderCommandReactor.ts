@@ -1344,6 +1344,18 @@ const make = Effect.gen(function* () {
         if (Cause.hasInterruptsOnly(cause)) {
           return;
         }
+        const latestThread = yield* resolveThread(event.payload.threadId);
+        const latestUsageLimitResume = latestThread?.usageLimitResume ?? null;
+        if (
+          latestThread === undefined ||
+          latestUsageLimitResume === null ||
+          latestUsageLimitResume.nextAttemptAt !== null ||
+          latestUsageLimitResume.attempt !== event.payload.attempt ||
+          latestThread.deletedAt !== null ||
+          latestThread.settledOverride === "settled"
+        ) {
+          return;
+        }
         const detail = formatFailureDetail(cause);
         const usageLimit = providerUsageLimitFromError({ message: detail });
         const createdAt = DateTime.formatIso(yield* DateTime.now);
