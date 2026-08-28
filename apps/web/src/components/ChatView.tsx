@@ -309,6 +309,7 @@ import {
   shouldShowThreadErrorBanner,
   ThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
+import { resolveUsageLimitResumePresentation } from "./chat/usageLimitResumePresentation";
 import {
   resolveDisplayedThreadPr,
   threadChangeRequestSnapshotsAtom,
@@ -1641,14 +1642,14 @@ function ChatViewContent(props: ChatViewProps) {
   const [, setThreadErrorBannerDismissTick] = useState(0);
   const usageLimitResume = activeServerThread?.usageLimitResume ?? null;
   const isUsageLimitError = activeServerThread?.session?.lastErrorClass === "usage_limit";
-  const showUsageLimitResumeBanner = isUsageLimitError || usageLimitResume !== null;
-  const displayedThreadError =
-    usageLimitResume !== null
-      ? (threadError ??
-        (usageLimitResume.nextAttemptAt === null
-          ? "T3 is resuming this thread now."
-          : "T3 will resume this thread automatically."))
-      : visibleThreadError;
+  const { errorBannerError: displayedThreadError, showStatusBanner: showUsageLimitResumeStatus } =
+    resolveUsageLimitResumePresentation({
+      threadError,
+      visibleThreadError,
+      hasScheduledResume: usageLimitResume !== null,
+    });
+  const showUsageLimitResumeErrorAction =
+    displayedThreadError !== null && (isUsageLimitError || usageLimitResume !== null);
   const usageLimitActionDescription =
     usageLimitResume?.nextAttemptAt === null
       ? "Trying again now. Cancel to stop further automatic retries."
@@ -4760,6 +4761,36 @@ function ChatViewContent(props: ChatViewProps) {
   // interrupting, and works by session, so no active turn is needed.
   const activeBackgroundLiveness =
     !isWorking && activeThread ? (activeThreadShell?.backgroundLiveness ?? null) : null;
+  const usageLimitResumeBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!showUsageLimitResumeStatus || usageLimitResume === null || !activeThread) {
+      return null;
+    }
+    const resuming = usageLimitResume.nextAttemptAt === null;
+    return {
+      id: `usage-limit-resume:${activeThread.id}`,
+      variant: "info",
+      icon: <AlarmClockIcon />,
+      title: resuming ? "Resuming this thread" : "Automatic resume scheduled",
+      description: usageLimitActionDescription,
+      actions: (
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={usageLimitActionPending}
+          onClick={() => void handleUsageLimitResumeAction()}
+        >
+          Cancel auto-resume
+        </Button>
+      ),
+    };
+  }, [
+    activeThread,
+    handleUsageLimitResumeAction,
+    showUsageLimitResumeStatus,
+    usageLimitActionDescription,
+    usageLimitActionPending,
+    usageLimitResume,
+  ]);
   const [isStoppingBackgroundWork, setIsStoppingBackgroundWork] = useState(false);
   useEffect(() => {
     // "Stopping..." holds until the liveness clears; the interrupt command
@@ -5016,11 +5047,14 @@ function ChatViewContent(props: ChatViewProps) {
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
+    const usageLimitResumeItems =
+      usageLimitResumeBannerItem === null ? [] : [usageLimitResumeBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
         ...urgentSystemItems,
         ...backgroundLivenessItems,
         ...calmSystemItems,
+        ...usageLimitResumeItems,
         ...resumeCompactionItems,
         ...wokeThreadItems,
         ...parkedThreadItems,
@@ -5030,6 +5064,7 @@ function ChatViewContent(props: ChatViewProps) {
       ...urgentSystemItems,
       ...backgroundLivenessItems,
       ...calmSystemItems,
+      ...usageLimitResumeItems,
       ...resumeCompactionItems,
       ...wokeThreadItems,
       {
@@ -5083,6 +5118,7 @@ function ChatViewContent(props: ChatViewProps) {
     resumeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
+    usageLimitResumeBannerItem,
     wokeThreadBannerItem,
   ]);
   useEffect(() => {
@@ -6983,16 +7019,18 @@ function ChatViewContent(props: ChatViewProps) {
         <ThreadErrorBanner
           error={displayedThreadError}
           actionLabel={
-            showUsageLimitResumeBanner
+            showUsageLimitResumeErrorAction
               ? usageLimitResume === null
                 ? "Resume when available"
                 : "Cancel auto-resume"
               : undefined
           }
-          actionDescription={usageLimitActionDescription}
+          actionDescription={
+            showUsageLimitResumeErrorAction ? usageLimitActionDescription : undefined
+          }
           actionPending={usageLimitActionPending}
           onAction={
-            showUsageLimitResumeBanner ? () => void handleUsageLimitResumeAction() : undefined
+            showUsageLimitResumeErrorAction ? () => void handleUsageLimitResumeAction() : undefined
           }
           onDismiss={
             usageLimitResume !== null
