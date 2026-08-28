@@ -152,6 +152,9 @@ describe("ProviderCommandReactor", () => {
     readonly requiresNewThreadForModelChange?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly usageLimitResumeAttemptDispatchFailures?: number;
+    readonly usageLimitResumeSessionErrorDispatchFailures?: number;
+    readonly usageLimitResumeActivityDispatchFailures?: number;
+    readonly usageLimitResumeTransitionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
     readonly createSecondThread?: boolean;
     readonly usageLimitResumeScheduledBeforeStart?: string;
@@ -387,8 +390,12 @@ describe("ProviderCommandReactor", () => {
     );
     let titleRegenerationCompletionDispatchAttempts = 0;
     let usageLimitResumeAttemptDispatchAttempts = 0;
+    let usageLimitResumeSessionErrorDispatchAttempts = 0;
+    let usageLimitResumeActivityDispatchAttempts = 0;
+    let usageLimitResumeTransitionDispatchAttempts = 0;
     const usageLimitResumeAttemptObserved = Effect.runSync(Deferred.make<void>());
     const usageLimitResumeAttemptDispatched = Effect.runSync(Deferred.make<void>());
+    const usageLimitResumeTransitionDispatched = Effect.runSync(Deferred.make<void>());
     const reactorOrchestrationLayer = Layer.effect(
       OrchestrationEngineService,
       Effect.gen(function* () {
@@ -428,6 +435,63 @@ describe("ProviderCommandReactor", () => {
                   Effect.andThen(engine.dispatch(command)),
                   Effect.tap(() => Deferred.succeed(usageLimitResumeAttemptDispatched, undefined)),
                 );
+              });
+            }
+            if (command.type === "thread.session.set" && command.session.status === "error") {
+              usageLimitResumeSessionErrorDispatchAttempts += 1;
+              if (
+                usageLimitResumeSessionErrorDispatchAttempts <=
+                (input?.usageLimitResumeSessionErrorDispatchFailures ?? 0)
+              ) {
+                return Effect.fail(
+                  new OrchestrationListenerCallbackError({
+                    listener: "domain-event",
+                    detail: "Injected usage-limit session-error dispatch failure",
+                  }),
+                );
+              }
+            }
+            if (
+              command.type === "thread.activity.append" &&
+              command.activity.kind === "provider.turn.start.failed"
+            ) {
+              usageLimitResumeActivityDispatchAttempts += 1;
+              if (
+                usageLimitResumeActivityDispatchAttempts <=
+                (input?.usageLimitResumeActivityDispatchFailures ?? 0)
+              ) {
+                return Effect.fail(
+                  new OrchestrationListenerCallbackError({
+                    listener: "domain-event",
+                    detail: "Injected usage-limit activity dispatch failure",
+                  }),
+                );
+              }
+            }
+            if (
+              command.type === "thread.usage-limit-resume.retry" ||
+              command.type === "thread.usage-limit-resume.cancel"
+            ) {
+              return Effect.suspend(() => {
+                usageLimitResumeTransitionDispatchAttempts += 1;
+                if (
+                  usageLimitResumeTransitionDispatchAttempts <=
+                  (input?.usageLimitResumeTransitionDispatchFailures ?? 0)
+                ) {
+                  return Effect.fail(
+                    new OrchestrationListenerCallbackError({
+                      listener: "domain-event",
+                      detail: "Injected usage-limit transition dispatch failure",
+                    }),
+                  );
+                }
+                return engine
+                  .dispatch(command)
+                  .pipe(
+                    Effect.tap(() =>
+                      Deferred.succeed(usageLimitResumeTransitionDispatched, undefined),
+                    ),
+                  );
               });
             }
             return engine.dispatch(command);
@@ -594,10 +658,18 @@ describe("ProviderCommandReactor", () => {
       get usageLimitResumeAttemptDispatchAttempts() {
         return usageLimitResumeAttemptDispatchAttempts;
       },
-      waitForUsageLimitResumeAttempt: () =>
-        runtime!.runPromise(Deferred.await(usageLimitResumeAttemptObserved)),
-      waitForUsageLimitResumeAttemptDispatch: () =>
-        runtime!.runPromise(Deferred.await(usageLimitResumeAttemptDispatched)),
+      get usageLimitResumeSessionErrorDispatchAttempts() {
+        return usageLimitResumeSessionErrorDispatchAttempts;
+      },
+      get usageLimitResumeActivityDispatchAttempts() {
+        return usageLimitResumeActivityDispatchAttempts;
+      },
+      get usageLimitResumeTransitionDispatchAttempts() {
+        return usageLimitResumeTransitionDispatchAttempts;
+      },
+      usageLimitResumeAttemptObserved: Deferred.await(usageLimitResumeAttemptObserved),
+      usageLimitResumeAttemptDispatched: Deferred.await(usageLimitResumeAttemptDispatched),
+      usageLimitResumeTransitionDispatched: Deferred.await(usageLimitResumeTransitionDispatched),
     };
   }
 
@@ -674,20 +746,24 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });
   });
 
-  it("retries a transient automatic-resume attempt dispatch failure", async () => {
-    const resumeAt = DateTime.formatIso(DateTime.add(DateTime.nowUnsafe(), { seconds: 1 }));
-    const harness = await createHarness({
-      usageLimitResumeAttemptDispatchFailures: 1,
-      usageLimitResumeScheduledBeforeStart: resumeAt,
-    });
-    await harness.waitForUsageLimitResumeAttempt();
-    await harness.waitForUsageLimitResumeAttemptDispatch();
+  effectIt.effect("retries a transient automatic-resume attempt dispatch failure", () =>
+    Effect.gen(function* () {
+      const resumeAt = DateTime.formatIso(DateTime.add(DateTime.nowUnsafe(), { seconds: 1 }));
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          usageLimitResumeAttemptDispatchFailures: 1,
+          usageLimitResumeScheduledBeforeStart: resumeAt,
+        }),
+      );
+      yield* harness.usageLimitResumeAttemptObserved;
+      yield* harness.usageLimitResumeAttemptDispatched;
 
-    expect(harness.usageLimitResumeAttemptDispatchAttempts).toBe(2);
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });
-  });
+      expect(harness.usageLimitResumeAttemptDispatchAttempts).toBe(2);
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });
+    }),
+  );
 
   it("paces another retry when an ACP provider still reports a usage limit", async () => {
     const harness = await createHarness({
@@ -744,6 +820,52 @@ describe("ProviderCommandReactor", () => {
     });
     expect(thread?.usageLimitResume?.nextAttemptAt).not.toBeNull();
   });
+
+  effectIt.effect(
+    "advances the durable retry after reporting and transition dispatch failures",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            sendTurnEffect: () =>
+              Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "grok",
+                  method: "session/prompt",
+                  detail: "Grok usage limit reached. Try again later.",
+                }),
+              ),
+            usageLimitResumeSessionErrorDispatchFailures: 1,
+            usageLimitResumeActivityDispatchFailures: 1,
+            usageLimitResumeTransitionDispatchFailures: 1,
+          }),
+        );
+        const resumeAt = "2099-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.usage-limit-resume.schedule",
+          commandId: CommandId.make("cmd-report-failure-resume-schedule"),
+          threadId: ThreadId.make("thread-1"),
+          resumeAt,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.usage-limit-resume.attempt",
+          commandId: CommandId.make("cmd-report-failure-resume-attempt"),
+          threadId: ThreadId.make("thread-1"),
+          expectedAttemptAt: resumeAt,
+          createdAt: resumeAt,
+        });
+        yield* harness.usageLimitResumeTransitionDispatched;
+
+        expect(harness.usageLimitResumeSessionErrorDispatchAttempts).toBe(1);
+        expect(harness.usageLimitResumeActivityDispatchAttempts).toBe(1);
+        expect(harness.usageLimitResumeTransitionDispatchAttempts).toBe(2);
+        const readModel = yield* Effect.promise(() => harness.readModel());
+        const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+        expect(thread?.usageLimitResume?.attempt).toBe(1);
+        expect(thread?.usageLimitResume?.nextAttemptAt).not.toBeNull();
+      }),
+  );
 
   it("recovers an in-flight automatic resume after a server restart", async () => {
     const harness = await createHarness({ usageLimitResumeAttemptedBeforeStart: true });
@@ -3334,7 +3456,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.activity.append",
         commandId: CommandId.make("cmd-approval-requested"),
