@@ -24,6 +24,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -1246,13 +1247,34 @@ const make = Effect.gen(function* () {
     const delayMillis = Math.max(0, Date.parse(resumeAt) - DateTime.toEpochMillis(now));
     yield* Effect.sleep(Duration.millis(delayMillis));
     const createdAt = DateTime.formatIso(yield* DateTime.now);
-    yield* orchestrationEngine.dispatch({
-      type: "thread.usage-limit-resume.attempt",
-      commandId: yield* serverCommandId("usage-limit-resume-attempt"),
-      threadId,
-      expectedAttemptAt: resumeAt,
-      createdAt,
-    });
+    const commandId = yield* serverCommandId("usage-limit-resume-attempt");
+    yield* orchestrationEngine
+      .dispatch({
+        type: "thread.usage-limit-resume.attempt",
+        commandId,
+        threadId,
+        expectedAttemptAt: resumeAt,
+        createdAt,
+      })
+      .pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning(
+            "provider command reactor usage-limit attempt dispatch failed; retrying",
+            {
+              threadId,
+              resumeAt,
+              error,
+            },
+          ),
+        ),
+        Effect.retry({
+          schedule: Schedule.exponential("1 second").pipe(
+            Schedule.modifyDelay(({ duration }) =>
+              Effect.succeed(Duration.min(duration, Duration.seconds(30))),
+            ),
+          ),
+        }),
+      );
   });
 
   const replaceUsageLimitResumeSchedule = Effect.fn("replaceUsageLimitResumeSchedule")(function* (

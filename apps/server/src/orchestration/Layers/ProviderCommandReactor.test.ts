@@ -23,6 +23,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -35,6 +36,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
+import { OrchestrationListenerCallbackError } from "../Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -149,8 +151,10 @@ describe("ProviderCommandReactor", () => {
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly requiresNewThreadForModelChange?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
+    readonly usageLimitResumeAttemptDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
     readonly createSecondThread?: boolean;
+    readonly usageLimitResumeScheduledBeforeStart?: string;
     readonly usageLimitResumeAttemptedBeforeStart?: boolean;
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly stopSessionEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
@@ -382,6 +386,9 @@ describe("ProviderCommandReactor", () => {
       Layer.provide(SqlitePersistenceMemory),
     );
     let titleRegenerationCompletionDispatchAttempts = 0;
+    let usageLimitResumeAttemptDispatchAttempts = 0;
+    const usageLimitResumeAttemptObserved = Effect.runSync(Deferred.make<void>());
+    const usageLimitResumeAttemptDispatched = Effect.runSync(Deferred.make<void>());
     const reactorOrchestrationLayer = Layer.effect(
       OrchestrationEngineService,
       Effect.gen(function* () {
@@ -397,6 +404,31 @@ describe("ProviderCommandReactor", () => {
               ) {
                 return Effect.die(new Error("Injected title regeneration completion failure"));
               }
+            }
+            if (command.type === "thread.usage-limit-resume.attempt") {
+              return Effect.suspend(() => {
+                usageLimitResumeAttemptDispatchAttempts += 1;
+                const markObserved = Deferred.succeed(usageLimitResumeAttemptObserved, undefined);
+                if (
+                  usageLimitResumeAttemptDispatchAttempts <=
+                  (input?.usageLimitResumeAttemptDispatchFailures ?? 0)
+                ) {
+                  return markObserved.pipe(
+                    Effect.andThen(
+                      Effect.fail(
+                        new OrchestrationListenerCallbackError({
+                          listener: "domain-event",
+                          detail: "Injected usage-limit attempt dispatch failure",
+                        }),
+                      ),
+                    ),
+                  );
+                }
+                return markObserved.pipe(
+                  Effect.andThen(engine.dispatch(command)),
+                  Effect.tap(() => Deferred.succeed(usageLimitResumeAttemptDispatched, undefined)),
+                );
+              });
             }
             return engine.dispatch(command);
           },
@@ -506,23 +538,29 @@ describe("ProviderCommandReactor", () => {
         }),
       );
     }
-    if (input?.usageLimitResumeAttemptedBeforeStart === true) {
-      const resumeAt = "2099-01-01T00:00:00.000Z";
+    const scheduledResumeAt =
+      input?.usageLimitResumeScheduledBeforeStart ??
+      (input?.usageLimitResumeAttemptedBeforeStart === true
+        ? "2099-01-01T00:00:00.000Z"
+        : undefined);
+    if (scheduledResumeAt !== undefined) {
       await Effect.runPromise(
         engine.dispatch({
           type: "thread.usage-limit-resume.schedule",
           commandId: CommandId.make("cmd-resume-before-reactor-start"),
           threadId: ThreadId.make("thread-1"),
-          resumeAt,
+          resumeAt: scheduledResumeAt,
         }),
       );
+    }
+    if (input?.usageLimitResumeAttemptedBeforeStart === true && scheduledResumeAt !== undefined) {
       await Effect.runPromise(
         engine.dispatch({
           type: "thread.usage-limit-resume.attempt",
           commandId: CommandId.make("cmd-resume-attempt-before-reactor-start"),
           threadId: ThreadId.make("thread-1"),
-          expectedAttemptAt: resumeAt,
-          createdAt: resumeAt,
+          expectedAttemptAt: scheduledResumeAt,
+          createdAt: scheduledResumeAt,
         }),
       );
     }
@@ -553,6 +591,13 @@ describe("ProviderCommandReactor", () => {
       get titleRegenerationCompletionDispatchAttempts() {
         return titleRegenerationCompletionDispatchAttempts;
       },
+      get usageLimitResumeAttemptDispatchAttempts() {
+        return usageLimitResumeAttemptDispatchAttempts;
+      },
+      waitForUsageLimitResumeAttempt: () =>
+        runtime!.runPromise(Deferred.await(usageLimitResumeAttemptObserved)),
+      waitForUsageLimitResumeAttemptDispatch: () =>
+        runtime!.runPromise(Deferred.await(usageLimitResumeAttemptDispatched)),
     };
   }
 
@@ -626,6 +671,21 @@ describe("ProviderCommandReactor", () => {
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.messages).toHaveLength(0);
+    expect(thread?.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });
+  });
+
+  it("retries a transient automatic-resume attempt dispatch failure", async () => {
+    const resumeAt = DateTime.formatIso(DateTime.add(DateTime.nowUnsafe(), { seconds: 1 }));
+    const harness = await createHarness({
+      usageLimitResumeAttemptDispatchFailures: 1,
+      usageLimitResumeScheduledBeforeStart: resumeAt,
+    });
+    await harness.waitForUsageLimitResumeAttempt();
+    await harness.waitForUsageLimitResumeAttemptDispatch();
+
+    expect(harness.usageLimitResumeAttemptDispatchAttempts).toBe(2);
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });
   });
 
