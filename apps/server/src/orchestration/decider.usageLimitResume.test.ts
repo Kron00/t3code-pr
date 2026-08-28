@@ -16,12 +16,23 @@ import { decideOrchestrationCommand } from "./decider.ts";
 const NOW = "2026-01-01T00:00:00.000Z";
 const FIRST_ATTEMPT = "1970-01-01T00:05:00.000Z";
 const SECOND_ATTEMPT = "1970-01-01T00:20:00.000Z";
+const USAGE_LIMIT_SESSION = {
+  threadId: ThreadId.make("thread-1"),
+  status: "error" as const,
+  providerName: "codex",
+  runtimeMode: "full-access" as const,
+  activeTurnId: null,
+  lastError: "Usage limit reached",
+  lastErrorClass: "usage_limit" as const,
+  updatedAt: NOW,
+};
 
 function makeReadModel(
   usageLimitResume: OrchestrationThread["usageLimitResume"] = null,
   settledOverride: OrchestrationThread["settledOverride"] = null,
   archivedAt: string | null = null,
   deletedAt: string | null = null,
+  session: OrchestrationThread["session"] = USAGE_LIMIT_SESSION,
 ): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
@@ -48,7 +59,7 @@ function makeReadModel(
         proposedPlans: [],
         activities: [],
         checkpoints: [],
-        session: null,
+        session,
       },
     ],
     updatedAt: NOW,
@@ -156,6 +167,51 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
         true,
       );
       expect(events.some((event) => event.type === "thread.turn-start-requested")).toBe(true);
+    }),
+  );
+
+  it.effect("rejects scheduling and cancels an attempt after the thread becomes active", () =>
+    Effect.gen(function* () {
+      const runningSession: OrchestrationThread["session"] = {
+        threadId: ThreadId.make("thread-1"),
+        status: "running",
+        providerName: "codex",
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: NOW,
+      };
+      const scheduleError = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.usage-limit-resume.schedule",
+          commandId: CommandId.make("cmd-running-schedule"),
+          threadId: ThreadId.make("thread-1"),
+          resumeAt: FIRST_ATTEMPT,
+        },
+        readModel: makeReadModel(null, null, null, null, runningSession),
+      }).pipe(Effect.flip);
+      expect(scheduleError._tag).toBe("OrchestrationCommandInvariantError");
+
+      const attempted = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.usage-limit-resume.attempt",
+          commandId: CommandId.make("cmd-running-attempt"),
+          threadId: ThreadId.make("thread-1"),
+          expectedAttemptAt: FIRST_ATTEMPT,
+          createdAt: FIRST_ATTEMPT,
+        },
+        readModel: makeReadModel(
+          { nextAttemptAt: FIRST_ATTEMPT, attempt: 0 },
+          null,
+          null,
+          null,
+          runningSession,
+        ),
+      });
+      const attemptedEvents = Array.isArray(attempted) ? attempted : [attempted];
+      expect(attemptedEvents.map((event) => event.type)).toEqual([
+        "thread.usage-limit-resume-cancelled",
+      ]);
     }),
   );
 

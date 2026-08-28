@@ -316,6 +316,23 @@ describe("ProviderRuntimeIngestion", () => {
       createdAt,
       updatedAt: createdAt,
     });
+    const markUsageLimited = () =>
+      dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-usage-limited"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "error",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: "Usage limit reached",
+          lastErrorClass: "usage_limit",
+          updatedAt: createdAt,
+        },
+        createdAt,
+      });
 
     return {
       engine,
@@ -323,6 +340,7 @@ describe("ProviderRuntimeIngestion", () => {
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
+      markUsageLimited,
       drain,
     };
   }
@@ -2763,6 +2781,7 @@ describe("ProviderRuntimeIngestion", () => {
     const attemptedAt = "2099-01-01T00:00:00.000Z";
     const providerRetryAt = "2099-01-01T01:00:00.000Z";
 
+    await harness.markUsageLimited();
     await harness.dispatch({
       type: "thread.usage-limit-resume.schedule",
       commandId: CommandId.make("cmd-runtime-resume-schedule"),
@@ -2806,6 +2825,7 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness();
     const attemptedAt = "2099-01-01T00:00:00.000Z";
 
+    await harness.markUsageLimited();
     await harness.dispatch({
       type: "thread.usage-limit-resume.schedule",
       commandId: CommandId.make("cmd-successful-resume-schedule"),
@@ -2847,6 +2867,7 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness();
     const attemptedAt = "2099-01-01T00:00:00.000Z";
 
+    await harness.markUsageLimited();
     await harness.dispatch({
       type: "thread.usage-limit-resume.schedule",
       commandId: CommandId.make("cmd-interrupted-resume-schedule"),
@@ -2882,6 +2903,7 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness();
     const attemptedAt = "2099-01-01T00:00:00.000Z";
 
+    await harness.markUsageLimited();
     await harness.dispatch({
       type: "thread.usage-limit-resume.schedule",
       commandId: CommandId.make("cmd-stale-completion-resume-schedule"),
@@ -2930,6 +2952,7 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness();
     const attemptedAt = "2099-01-01T00:00:00.000Z";
 
+    await harness.markUsageLimited();
     await harness.dispatch({
       type: "thread.usage-limit-resume.schedule",
       commandId: CommandId.make("cmd-stale-error-resume-schedule"),

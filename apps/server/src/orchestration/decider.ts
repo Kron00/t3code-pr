@@ -3,6 +3,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  type OrchestrationThread,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -28,6 +29,10 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 // window is a failed/stale start, not pending work. Mirrors the client's
 // QUEUED_TURN_START_GRACE_MS in client-runtime threadSettled.ts.
 const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
+
+function isStoppedByUsageLimit(thread: Pick<OrchestrationThread, "session">): boolean {
+  return thread.session?.status === "error" && thread.session.lastErrorClass === "usage_limit";
+}
 
 /**
  * Blocked-on-you work derived from the thread's retained activities: an
@@ -773,11 +778,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.usage-limit-resume.schedule": {
-      yield* requireThreadNotArchived({
+      const thread = yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (!isStoppedByUsageLimit(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} is not stopped by a usage limit`,
+        });
+      }
       const occurredAt = yield* nowIso;
       if (!(Date.parse(command.resumeAt) > Date.parse(occurredAt))) {
         return yield* new OrchestrationCommandInvariantError({
@@ -905,7 +916,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const current = thread.usageLimitResume ?? null;
-      if ((thread.deletedAt !== null || thread.settledOverride === "settled") && current !== null) {
+      if (
+        (thread.deletedAt !== null ||
+          thread.settledOverride === "settled" ||
+          !isStoppedByUsageLimit(thread)) &&
+        current !== null
+      ) {
         return {
           ...(yield* withEventBase({
             aggregateKind: "thread",

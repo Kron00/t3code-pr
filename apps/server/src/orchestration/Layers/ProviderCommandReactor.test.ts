@@ -441,7 +441,11 @@ describe("ProviderCommandReactor", () => {
                 );
               });
             }
-            if (command.type === "thread.session.set" && command.session.status === "error") {
+            if (
+              command.type === "thread.session.set" &&
+              command.session.status === "error" &&
+              !String(command.commandId).startsWith("cmd-mark-usage-limited")
+            ) {
               usageLimitResumeSessionErrorDispatchAttempts += 1;
               if (
                 usageLimitResumeSessionErrorDispatchAttempts <=
@@ -565,6 +569,26 @@ describe("ProviderCommandReactor", () => {
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
     const runEffect = <A, E>(effect: Effect.Effect<A, E>) => runtime!.runPromise(effect);
+    let usageLimitSessionIndex = 0;
+    const markUsageLimited = (threadId = ThreadId.make("thread-1")) => {
+      usageLimitSessionIndex += 1;
+      return engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make(`cmd-mark-usage-limited-${usageLimitSessionIndex}`),
+        threadId,
+        session: {
+          threadId,
+          status: "error",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: "Usage limit reached",
+          lastErrorClass: "usage_limit",
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+    };
 
     await Effect.runPromise(
       engine.dispatch({
@@ -644,6 +668,7 @@ describe("ProviderCommandReactor", () => {
     ];
     if (scheduledResumeAt !== undefined) {
       for (const [index, threadId] of usageLimitResumeThreadIds.entries()) {
+        await Effect.runPromise(markUsageLimited(threadId));
         await Effect.runPromise(
           engine.dispatch({
             type: "thread.usage-limit-resume.schedule",
@@ -688,6 +713,7 @@ describe("ProviderCommandReactor", () => {
       generateBranchName,
       generateThreadTitle,
       runtimeSessions,
+      markUsageLimited,
       stateDir,
       drain,
       runEffect,
@@ -761,6 +787,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const resumeAt = "2099-01-01T00:00:00.000Z";
 
+    await harness.runEffect(harness.markUsageLimited());
     await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.usage-limit-resume.schedule",
@@ -823,6 +850,7 @@ describe("ProviderCommandReactor", () => {
     });
     const resumeAt = "2099-01-01T00:00:00.000Z";
 
+    await harness.runEffect(harness.markUsageLimited());
     await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.usage-limit-resume.schedule",
@@ -909,6 +937,7 @@ describe("ProviderCommandReactor", () => {
       );
       const resumeAt = "2099-01-01T00:00:00.000Z";
 
+      yield* harness.markUsageLimited();
       yield* harness.engine.dispatch({
         type: "thread.usage-limit-resume.schedule",
         commandId: CommandId.make("cmd-superseded-resume-schedule"),
@@ -965,6 +994,7 @@ describe("ProviderCommandReactor", () => {
         );
         const resumeAt = "2099-01-01T00:00:00.000Z";
 
+        yield* harness.markUsageLimited();
         yield* harness.engine.dispatch({
           type: "thread.usage-limit-resume.schedule",
           commandId: CommandId.make("cmd-report-failure-resume-schedule"),
@@ -1067,6 +1097,7 @@ describe("ProviderCommandReactor", () => {
       });
       yield* Deferred.await(blockedSessionStarted);
 
+      yield* harness.markUsageLimited();
       yield* harness.engine.dispatch({
         type: "thread.usage-limit-resume.schedule",
         commandId: CommandId.make("cmd-settled-resume-schedule"),
@@ -1139,6 +1170,7 @@ describe("ProviderCommandReactor", () => {
       });
       yield* Deferred.await(blockedSessionStarted);
 
+      yield* harness.markUsageLimited();
       yield* harness.engine.dispatch({
         type: "thread.usage-limit-resume.schedule",
         commandId: CommandId.make("cmd-archived-resume-schedule"),
@@ -1214,6 +1246,7 @@ describe("ProviderCommandReactor", () => {
       });
       yield* Deferred.await(blockedSessionStarted);
 
+      yield* harness.markUsageLimited();
       yield* harness.engine.dispatch({
         type: "thread.usage-limit-resume.schedule",
         commandId: CommandId.make("cmd-deleted-resume-schedule"),
