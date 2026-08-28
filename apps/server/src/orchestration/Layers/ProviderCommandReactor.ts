@@ -482,7 +482,7 @@ const make = Effect.gen(function* () {
       Effect.andThen(gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath })),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
+          ? Effect.interrupt
           : Effect.logWarning("provider command reactor failed to recreate worktree", {
               threadId: thread.id,
               worktreePath,
@@ -1763,9 +1763,11 @@ const make = Effect.gen(function* () {
         ),
       ),
       Effect.catchCause((cause) =>
-        Effect.logWarning("provider command reactor failed to restore usage-limit resumes", {
-          cause: Cause.pretty(cause),
-        }).pipe(Effect.as([])),
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.logWarning("provider command reactor failed to restore usage-limit resumes", {
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as([])),
       ),
     );
     yield* forkParked(
@@ -1787,11 +1789,14 @@ const make = Effect.gen(function* () {
                 createdAt,
               });
             }).pipe(
+              Effect.retry({ times: 1 }),
               Effect.catchCause((cause) =>
-                Effect.logWarning(
-                  "provider command reactor failed to recover an in-flight usage-limit resume",
-                  { threadId, cause: Cause.pretty(cause) },
-                ),
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.interrupt
+                  : Effect.logWarning(
+                      "provider command reactor failed to recover an in-flight usage-limit resume",
+                      { threadId, cause: Cause.pretty(cause) },
+                    ),
               ),
             ),
       { concurrency: "unbounded", discard: true },

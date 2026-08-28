@@ -155,10 +155,12 @@ describe("ProviderCommandReactor", () => {
     readonly usageLimitResumeSessionErrorDispatchFailures?: number;
     readonly usageLimitResumeActivityDispatchFailures?: number;
     readonly usageLimitResumeTransitionDispatchFailures?: number;
+    readonly usageLimitResumeTransitionFailureThreadId?: ThreadId;
     readonly titleRegenerationBeforeStart?: "one" | "two";
     readonly createSecondThread?: boolean;
     readonly usageLimitResumeScheduledBeforeStart?: string;
     readonly usageLimitResumeAttemptedBeforeStart?: boolean;
+    readonly usageLimitResumeAttemptedSecondThreadBeforeStart?: boolean;
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly stopSessionEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly sendTurnEffect?: () => Effect.Effect<
@@ -393,9 +395,11 @@ describe("ProviderCommandReactor", () => {
     let usageLimitResumeSessionErrorDispatchAttempts = 0;
     let usageLimitResumeActivityDispatchAttempts = 0;
     let usageLimitResumeTransitionDispatchAttempts = 0;
+    const usageLimitResumeTransitionDispatchAttemptsByThread = new Map<ThreadId, number>();
     const usageLimitResumeAttemptObserved = Effect.runSync(Deferred.make<void>());
     const usageLimitResumeAttemptDispatched = Effect.runSync(Deferred.make<void>());
     const usageLimitResumeTransitionDispatched = Effect.runSync(Deferred.make<void>());
+    const usageLimitResumeThread2TransitionDispatched = Effect.runSync(Deferred.make<void>());
     const reactorOrchestrationLayer = Layer.effect(
       OrchestrationEngineService,
       Effect.gen(function* () {
@@ -474,9 +478,17 @@ describe("ProviderCommandReactor", () => {
             ) {
               return Effect.suspend(() => {
                 usageLimitResumeTransitionDispatchAttempts += 1;
+                const threadAttempts =
+                  (usageLimitResumeTransitionDispatchAttemptsByThread.get(command.threadId) ?? 0) +
+                  1;
+                usageLimitResumeTransitionDispatchAttemptsByThread.set(
+                  command.threadId,
+                  threadAttempts,
+                );
+                const failureThreadId = input?.usageLimitResumeTransitionFailureThreadId;
                 if (
-                  usageLimitResumeTransitionDispatchAttempts <=
-                  (input?.usageLimitResumeTransitionDispatchFailures ?? 0)
+                  (failureThreadId === undefined || failureThreadId === command.threadId) &&
+                  threadAttempts <= (input?.usageLimitResumeTransitionDispatchFailures ?? 0)
                 ) {
                   return Effect.fail(
                     new OrchestrationListenerCallbackError({
@@ -489,7 +501,20 @@ describe("ProviderCommandReactor", () => {
                   .dispatch(command)
                   .pipe(
                     Effect.tap(() =>
-                      Deferred.succeed(usageLimitResumeTransitionDispatched, undefined),
+                      Effect.all(
+                        [
+                          Deferred.succeed(usageLimitResumeTransitionDispatched, undefined),
+                          ...(command.threadId === ThreadId.make("thread-2")
+                            ? [
+                                Deferred.succeed(
+                                  usageLimitResumeThread2TransitionDispatched,
+                                  undefined,
+                                ),
+                              ]
+                            : []),
+                        ],
+                        { discard: true },
+                      ),
                     ),
                   );
               });
@@ -567,7 +592,11 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
-    if (input?.titleRegenerationBeforeStart === "two" || input?.createSecondThread === true) {
+    if (
+      input?.titleRegenerationBeforeStart === "two" ||
+      input?.createSecondThread === true ||
+      input?.usageLimitResumeAttemptedSecondThreadBeforeStart === true
+    ) {
       await Effect.runPromise(
         engine.dispatch({
           type: "thread.create",
@@ -607,26 +636,36 @@ describe("ProviderCommandReactor", () => {
       (input?.usageLimitResumeAttemptedBeforeStart === true
         ? "2099-01-01T00:00:00.000Z"
         : undefined);
+    const usageLimitResumeThreadIds = [
+      ThreadId.make("thread-1"),
+      ...(input?.usageLimitResumeAttemptedSecondThreadBeforeStart === true
+        ? [ThreadId.make("thread-2")]
+        : []),
+    ];
     if (scheduledResumeAt !== undefined) {
-      await Effect.runPromise(
-        engine.dispatch({
-          type: "thread.usage-limit-resume.schedule",
-          commandId: CommandId.make("cmd-resume-before-reactor-start"),
-          threadId: ThreadId.make("thread-1"),
-          resumeAt: scheduledResumeAt,
-        }),
-      );
+      for (const [index, threadId] of usageLimitResumeThreadIds.entries()) {
+        await Effect.runPromise(
+          engine.dispatch({
+            type: "thread.usage-limit-resume.schedule",
+            commandId: CommandId.make(`cmd-resume-before-reactor-start-${index + 1}`),
+            threadId,
+            resumeAt: scheduledResumeAt,
+          }),
+        );
+      }
     }
     if (input?.usageLimitResumeAttemptedBeforeStart === true && scheduledResumeAt !== undefined) {
-      await Effect.runPromise(
-        engine.dispatch({
-          type: "thread.usage-limit-resume.attempt",
-          commandId: CommandId.make("cmd-resume-attempt-before-reactor-start"),
-          threadId: ThreadId.make("thread-1"),
-          expectedAttemptAt: scheduledResumeAt,
-          createdAt: scheduledResumeAt,
-        }),
-      );
+      for (const [index, threadId] of usageLimitResumeThreadIds.entries()) {
+        await Effect.runPromise(
+          engine.dispatch({
+            type: "thread.usage-limit-resume.attempt",
+            commandId: CommandId.make(`cmd-resume-attempt-before-reactor-start-${index + 1}`),
+            threadId,
+            expectedAttemptAt: scheduledResumeAt,
+            createdAt: scheduledResumeAt,
+          }),
+        );
+      }
     }
 
     scope = await Effect.runPromise(Scope.make("sequential"));
@@ -667,9 +706,14 @@ describe("ProviderCommandReactor", () => {
       get usageLimitResumeTransitionDispatchAttempts() {
         return usageLimitResumeTransitionDispatchAttempts;
       },
+      usageLimitResumeTransitionDispatchAttemptsForThread: (threadId: ThreadId) =>
+        usageLimitResumeTransitionDispatchAttemptsByThread.get(threadId) ?? 0,
       usageLimitResumeAttemptObserved: Deferred.await(usageLimitResumeAttemptObserved),
       usageLimitResumeAttemptDispatched: Deferred.await(usageLimitResumeAttemptDispatched),
       usageLimitResumeTransitionDispatched: Deferred.await(usageLimitResumeTransitionDispatched),
+      usageLimitResumeThread2TransitionDispatched: Deferred.await(
+        usageLimitResumeThread2TransitionDispatched,
+      ),
     };
   }
 
@@ -867,18 +911,48 @@ describe("ProviderCommandReactor", () => {
       }),
   );
 
-  it("recovers an in-flight automatic resume after a server restart", async () => {
-    const harness = await createHarness({ usageLimitResumeAttemptedBeforeStart: true });
+  effectIt.effect("retries an in-flight automatic resume repair after a server restart", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          usageLimitResumeAttemptedBeforeStart: true,
+          usageLimitResumeTransitionDispatchFailures: 1,
+        }),
+      );
+      yield* harness.usageLimitResumeTransitionDispatched;
 
-    await waitFor(async () => {
-      const readModel = await harness.readModel();
+      expect(harness.usageLimitResumeTransitionDispatchAttempts).toBe(2);
+      const readModel = yield* Effect.promise(() => harness.readModel());
       const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-      return thread?.usageLimitResume?.attempt === 1;
-    });
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.usageLimitResume?.nextAttemptAt).not.toBeNull();
-  });
+      expect(thread?.usageLimitResume?.attempt).toBe(1);
+      expect(thread?.usageLimitResume?.nextAttemptAt).not.toBeNull();
+    }),
+  );
+
+  effectIt.effect("continues startup repair after one thread persistently fails", () =>
+    Effect.gen(function* () {
+      const thread1 = ThreadId.make("thread-1");
+      const thread2 = ThreadId.make("thread-2");
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          usageLimitResumeAttemptedBeforeStart: true,
+          usageLimitResumeAttemptedSecondThreadBeforeStart: true,
+          usageLimitResumeTransitionDispatchFailures: 2,
+          usageLimitResumeTransitionFailureThreadId: thread1,
+        }),
+      );
+      yield* harness.usageLimitResumeThread2TransitionDispatched;
+
+      expect(harness.usageLimitResumeTransitionDispatchAttemptsForThread(thread1)).toBe(2);
+      expect(harness.usageLimitResumeTransitionDispatchAttemptsForThread(thread2)).toBe(1);
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const failedThread = readModel.threads.find((entry) => entry.id === thread1);
+      const recoveredThread = readModel.threads.find((entry) => entry.id === thread2);
+      expect(failedThread?.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });
+      expect(recoveredThread?.usageLimitResume?.attempt).toBe(1);
+      expect(recoveredThread?.usageLimitResume?.nextAttemptAt).not.toBeNull();
+    }),
+  );
 
   effectIt.effect("does not resume an attempted timer after the thread is settled", () =>
     Effect.gen(function* () {
@@ -3438,7 +3512,7 @@ describe("ProviderCommandReactor", () => {
       ),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-for-approval-error"),
