@@ -20,6 +20,7 @@ const SECOND_ATTEMPT = "1970-01-01T00:20:00.000Z";
 function makeReadModel(
   usageLimitResume: OrchestrationThread["usageLimitResume"] = null,
   settledOverride: OrchestrationThread["settledOverride"] = null,
+  archivedAt: string | null = null,
 ): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
@@ -37,7 +38,7 @@ function makeReadModel(
         latestTurn: null,
         createdAt: NOW,
         updatedAt: NOW,
-        archivedAt: null,
+        archivedAt,
         settledOverride,
         settledAt: settledOverride === "settled" ? NOW : null,
         usageLimitResume,
@@ -186,6 +187,49 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
       const attemptedEvents = Array.isArray(attempted) ? attempted : [attempted];
       expect(attemptedEvents).toHaveLength(1);
       expect(attemptedEvents[0]?.type).toBe("thread.usage-limit-resume-cancelled");
+    }),
+  );
+
+  it.effect("rejects archived timers and rearms their schedule on unarchive", () =>
+    Effect.gen(function* () {
+      const archivedReadModel = makeReadModel(
+        { nextAttemptAt: FIRST_ATTEMPT, attempt: 2 },
+        null,
+        NOW,
+      );
+      const attemptError = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.usage-limit-resume.attempt",
+          commandId: CommandId.make("cmd-archived-attempt"),
+          threadId: ThreadId.make("thread-1"),
+          expectedAttemptAt: FIRST_ATTEMPT,
+          createdAt: FIRST_ATTEMPT,
+        },
+        readModel: archivedReadModel,
+      }).pipe(Effect.flip);
+      expect(attemptError._tag).toBe("OrchestrationCommandInvariantError");
+
+      const unarchived = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.unarchive",
+          commandId: CommandId.make("cmd-unarchive-resume"),
+          threadId: ThreadId.make("thread-1"),
+        },
+        readModel: archivedReadModel,
+      });
+      const unarchivedEvents = Array.isArray(unarchived) ? unarchived : [unarchived];
+      expect(unarchivedEvents.map((event) => event.type)).toEqual([
+        "thread.unarchived",
+        "thread.usage-limit-resume-scheduled",
+      ]);
+      const scheduledEvent = unarchivedEvents[1];
+      if (scheduledEvent?.type !== "thread.usage-limit-resume-scheduled") {
+        return;
+      }
+      expect(scheduledEvent.payload).toMatchObject({
+        resumeAt: FIRST_ATTEMPT,
+        attempt: 2,
+      });
     }),
   );
 });

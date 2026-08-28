@@ -429,25 +429,47 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.unarchive": {
-      yield* requireThreadArchived({
+      const thread = yield* requireThreadArchived({
         readModel,
         command,
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
+      const unarchivedEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt,
           commandId: command.commandId,
         })),
-        type: "thread.unarchived",
+        type: "thread.unarchived" as const,
         payload: {
           threadId: command.threadId,
           updatedAt: occurredAt,
         },
       };
+      const pendingResumeAt = thread.usageLimitResume?.nextAttemptAt ?? null;
+      if (pendingResumeAt === null) {
+        return unarchivedEvent;
+      }
+      return [
+        unarchivedEvent,
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.usage-limit-resume-scheduled" as const,
+          payload: {
+            threadId: command.threadId,
+            resumeAt: pendingResumeAt,
+            attempt: thread.usageLimitResume?.attempt ?? 0,
+            updatedAt: occurredAt,
+          },
+        },
+      ];
     }
 
     case "thread.settle": {
@@ -797,7 +819,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.usage-limit-resume.attempt": {
-      const thread = yield* requireThread({
+      const thread = yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,

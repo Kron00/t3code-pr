@@ -1642,14 +1642,13 @@ function ChatViewContent(props: ChatViewProps) {
   const usageLimitResume = activeServerThread?.usageLimitResume ?? null;
   const isUsageLimitError = activeServerThread?.session?.lastErrorClass === "usage_limit";
   const showUsageLimitResumeBanner = isUsageLimitError || usageLimitResume !== null;
-  const displayedThreadError = showUsageLimitResumeBanner
-    ? (threadError ??
-      (usageLimitResume === null
-        ? "This thread reached its usage limit."
-        : usageLimitResume.nextAttemptAt === null
+  const displayedThreadError =
+    usageLimitResume !== null
+      ? (threadError ??
+        (usageLimitResume.nextAttemptAt === null
           ? "T3 is resuming this thread now."
           : "T3 will resume this thread automatically."))
-    : visibleThreadError;
+      : visibleThreadError;
   const usageLimitActionDescription =
     usageLimitResume?.nextAttemptAt === null
       ? "Trying again now. Cancel to stop further automatic retries."
