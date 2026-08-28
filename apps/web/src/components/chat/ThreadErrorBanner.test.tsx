@@ -100,4 +100,19 @@ describe("ThreadErrorBanner", () => {
     expect(markup).toContain("Automatic resume scheduled");
     expect(markup).not.toContain('aria-label="Dismiss error"');
   });
+
+  it("keeps the action label while the action is pending", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadErrorBanner
+        error="Usage limit reached"
+        actionLabel="Cancel auto-resume"
+        actionPending
+        onAction={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Cancel auto-resume");
+    expect(markup).toContain("disabled");
+    expect(markup).not.toContain("Saving");
+  });
 });

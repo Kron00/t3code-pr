@@ -36,6 +36,7 @@ import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
+import type { OrchestrationDispatchError } from "../Errors.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -65,6 +66,7 @@ type ProviderIntentEvent = Extract<
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested"
+      | "thread.archived"
       | "thread.usage-limit-resume-scheduled"
       | "thread.usage-limit-resume-cancelled"
       | "thread.usage-limit-resume-attempted";
@@ -1239,26 +1241,30 @@ const make = Effect.gen(function* () {
       .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
   });
 
-  const retryUsageLimitResumeDispatch = <A, E, R>(
-    effect: Effect.Effect<A, E, R>,
+  const retryUsageLimitResumeDispatch = <A, R>(
+    effect: Effect.Effect<A, OrchestrationDispatchError, R>,
     input: {
       readonly threadId: ThreadId;
       readonly operation: "attempt" | "retry" | "cancel";
     },
-  ): Effect.Effect<A, E, R> =>
+  ): Effect.Effect<A, OrchestrationDispatchError, R> =>
     effect.pipe(
       Effect.tapError((error) =>
-        Effect.logWarning("provider command reactor usage-limit dispatch failed; retrying", {
+        Effect.logWarning("provider command reactor usage-limit dispatch failed", {
           threadId: input.threadId,
           operation: input.operation,
           error,
         }),
       ),
       Effect.retry({
+        while: (error) =>
+          error._tag === "OrchestrationListenerCallbackError" ||
+          error._tag === "PersistenceSqlError",
         schedule: Schedule.exponential("1 second").pipe(
           Schedule.modifyDelay(({ duration }) =>
             Effect.succeed(Duration.min(duration, Duration.seconds(30))),
           ),
+          Schedule.upTo({ duration: "10 minutes" }),
         ),
       }),
     );
@@ -1700,6 +1706,9 @@ const make = Effect.gen(function* () {
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
+      case "thread.archived":
+        yield* cancelUsageLimitResumeSchedule(event.payload.threadId);
+        return;
       case "thread.usage-limit-resume-scheduled":
         yield* replaceUsageLimitResumeSchedule(event.payload.threadId, event.payload.resumeAt);
         return;
@@ -1748,6 +1757,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested" ||
+        event.type === "thread.archived" ||
         event.type === "thread.usage-limit-resume-scheduled" ||
         event.type === "thread.usage-limit-resume-cancelled" ||
         event.type === "thread.usage-limit-resume-attempted"
@@ -1763,7 +1773,7 @@ const make = Effect.gen(function* () {
     const pendingUsageLimitResumes = yield* projectionSnapshotQuery.getCommandReadModel().pipe(
       Effect.map((readModel) =>
         readModel.threads.flatMap((thread) =>
-          thread.usageLimitResume == null
+          thread.archivedAt !== null || thread.usageLimitResume == null
             ? []
             : [
                 {

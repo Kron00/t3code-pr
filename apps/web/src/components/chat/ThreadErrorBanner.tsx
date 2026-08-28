@@ -66,7 +66,7 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
           <AlertAction>
             {onAction && actionLabel ? (
               <Button variant="outline" size="xs" disabled={actionPending} onClick={onAction}>
-                {actionPending ? "Saving…" : actionLabel}
+                {actionLabel}
               </Button>
             ) : null}
             {onDismiss ? (
