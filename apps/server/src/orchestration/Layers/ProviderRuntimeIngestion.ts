@@ -1623,9 +1623,8 @@ const make = Effect.gen(function* () {
                 ? null
                 : (thread.session?.lastError ?? null);
         const preservesErrorMetadata =
-          (event.type === "session.state.changed" && event.payload.state === "error") ||
-          (event.type === "turn.completed" &&
-            normalizeRuntimeTurnState(event.payload.state) === "failed");
+          event.type === "turn.completed" &&
+          normalizeRuntimeTurnState(event.payload.state) === "failed";
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {

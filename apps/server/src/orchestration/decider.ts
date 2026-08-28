@@ -384,25 +384,59 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
+      const deletedEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt,
           commandId: command.commandId,
         })),
-        type: "thread.deleted",
+        type: "thread.deleted" as const,
         payload: {
           threadId: command.threadId,
           deletedAt: occurredAt,
         },
       };
+      if (thread.usageLimitResume == null) {
+        return deletedEvent;
+      }
+      const companionEvents: Array<Omit<OrchestrationEvent, "sequence">> = [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.usage-limit-resume-cancelled",
+          payload: {
+            threadId: command.threadId,
+            updatedAt: occurredAt,
+          },
+        },
+      ];
+      if (thread.usageLimitResume.nextAttemptAt === null) {
+        companionEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.turn-interrupt-requested",
+          payload: {
+            threadId: command.threadId,
+            createdAt: occurredAt,
+          },
+        });
+      }
+      return [...companionEvents, deletedEvent];
     }
 
     case "thread.archive": {
@@ -774,7 +808,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (thread.archivedAt !== null) {
+      if (thread.deletedAt !== null || thread.archivedAt !== null) {
         return {
           ...(yield* withEventBase({
             aggregateKind: "thread",

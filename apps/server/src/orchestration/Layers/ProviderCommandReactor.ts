@@ -66,6 +66,7 @@ type ProviderIntentEvent = Extract<
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested"
+      | "thread.deleted"
       | "thread.archived"
       | "thread.usage-limit-resume-scheduled"
       | "thread.usage-limit-resume-cancelled"
@@ -1456,6 +1457,26 @@ const make = Effect.gen(function* () {
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
     if (!thread) {
+      yield* providerService.interruptTurn({ threadId: event.payload.threadId }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.interrupt
+            : providerService.stopSession({ threadId: event.payload.threadId }).pipe(
+                Effect.catchCause((stopCause) =>
+                  Cause.hasInterruptsOnly(stopCause)
+                    ? Effect.interrupt
+                    : Effect.logWarning(
+                        "provider command reactor failed to stop an inactive thread after interrupt failure",
+                        {
+                          threadId: event.payload.threadId,
+                          cause: Cause.pretty(stopCause),
+                          originalCause: Cause.pretty(cause),
+                        },
+                      ),
+                ),
+              ),
+        ),
+      );
       return;
     }
     const session = thread.session;
@@ -1708,6 +1729,7 @@ const make = Effect.gen(function* () {
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
+      case "thread.deleted":
       case "thread.archived":
         yield* cancelUsageLimitResumeSchedule(event.payload.threadId);
         return;
@@ -1759,6 +1781,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested" ||
+        event.type === "thread.deleted" ||
         event.type === "thread.archived" ||
         event.type === "thread.usage-limit-resume-scheduled" ||
         event.type === "thread.usage-limit-resume-cancelled" ||
@@ -1775,7 +1798,7 @@ const make = Effect.gen(function* () {
     const pendingUsageLimitResumes = yield* projectionSnapshotQuery.getCommandReadModel().pipe(
       Effect.map((readModel) =>
         readModel.threads.flatMap((thread) =>
-          thread.archivedAt !== null || thread.usageLimitResume == null
+          thread.deletedAt !== null || thread.archivedAt !== null || thread.usageLimitResume == null
             ? []
             : [
                 {

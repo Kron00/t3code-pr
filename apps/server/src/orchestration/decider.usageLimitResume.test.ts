@@ -193,6 +193,21 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
 
   it.effect("rejects a timer after its thread is deleted", () =>
     Effect.gen(function* () {
+      const deleted = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.delete",
+          commandId: CommandId.make("cmd-delete-in-flight-resume"),
+          threadId: ThreadId.make("thread-1"),
+        },
+        readModel: makeReadModel({ nextAttemptAt: null, attempt: 0 }),
+      });
+      const deletedEvents = Array.isArray(deleted) ? deleted : [deleted];
+      expect(deletedEvents.map((event) => event.type)).toEqual([
+        "thread.usage-limit-resume-cancelled",
+        "thread.turn-interrupt-requested",
+        "thread.deleted",
+      ]);
+
       const attempted = yield* decideOrchestrationCommand({
         command: {
           type: "thread.usage-limit-resume.attempt",

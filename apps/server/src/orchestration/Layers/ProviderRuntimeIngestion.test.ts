@@ -457,6 +457,49 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBeNull();
   });
 
+  it("does not reuse usage-limit metadata for an unrelated session error", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-session-with-usage-limit-metadata"),
+      threadId,
+      session: {
+        threadId,
+        status: "error",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: "Usage limit reached",
+        lastErrorClass: "usage_limit",
+        retryAt: "2099-01-01T00:00:00.000Z",
+        updatedAt: now,
+      },
+      createdAt: now,
+    });
+
+    harness.emit({
+      type: "session.state.changed",
+      eventId: asEventId("evt-unrelated-session-error"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      payload: {
+        state: "error",
+        reason: "Windows sandbox failed to start",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.lastError === "Windows sandbox failed to start",
+    );
+    expect(thread.session?.lastErrorClass).toBeUndefined();
+    expect(thread.session?.retryAt).toBeUndefined();
+  });
+
   it("clears active turn when provider session becomes ready", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

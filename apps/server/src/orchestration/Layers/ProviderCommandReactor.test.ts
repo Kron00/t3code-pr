@@ -801,6 +801,7 @@ describe("ProviderCommandReactor", () => {
       );
       yield* harness.usageLimitResumeAttemptObserved;
       yield* harness.usageLimitResumeAttemptDispatched;
+      yield* Effect.promise(() => harness.drain());
 
       expect(harness.usageLimitResumeAttemptDispatchAttempts).toBe(2);
       const readModel = yield* Effect.promise(() => harness.readModel());
@@ -1173,6 +1174,9 @@ describe("ProviderCommandReactor", () => {
       const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
       expect(thread?.archivedAt).not.toBeNull();
       expect(thread?.usageLimitResume).toBeNull();
+      expect(harness.interruptTurn.mock.calls).toContainEqual([
+        { threadId: ThreadId.make("thread-1") },
+      ]);
     }),
   );
 
@@ -1244,6 +1248,10 @@ describe("ProviderCommandReactor", () => {
       const readModel = yield* Effect.promise(() => harness.readModel());
       const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
       expect(thread?.deletedAt).not.toBeNull();
+      expect(thread?.usageLimitResume).toBeNull();
+      expect(harness.interruptTurn.mock.calls).toContainEqual([
+        { threadId: ThreadId.make("thread-1") },
+      ]);
     }),
   );
 
