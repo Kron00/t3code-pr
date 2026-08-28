@@ -2800,6 +2800,41 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.usageLimitResume).toBeNull();
   });
 
+  it("clears automatic resume after an interrupted provider turn", async () => {
+    const harness = await createHarness();
+    const attemptedAt = "2099-01-01T00:00:00.000Z";
+
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.schedule",
+      commandId: CommandId.make("cmd-interrupted-resume-schedule"),
+      threadId: ThreadId.make("thread-1"),
+      resumeAt: attemptedAt,
+    });
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.attempt",
+      commandId: CommandId.make("cmd-interrupted-resume-attempt"),
+      threadId: ThreadId.make("thread-1"),
+      expectedAttemptAt: attemptedAt,
+      createdAt: attemptedAt,
+    });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-interrupted-auto-resume"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: attemptedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-interrupted-auto-resume"),
+      payload: { state: "cancelled" },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.usageLimitResume === null,
+    );
+    expect(thread.usageLimitResume).toBeNull();
+  });
+
   it("keeps automatic resume active when a superseded turn completes", async () => {
     const harness = await createHarness();
     const attemptedAt = "2099-01-01T00:00:00.000Z";

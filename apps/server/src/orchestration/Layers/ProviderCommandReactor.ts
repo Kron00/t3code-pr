@@ -1339,6 +1339,7 @@ const make = Effect.gen(function* () {
       usageLimitResume.nextAttemptAt !== null ||
       usageLimitResume.attempt !== event.payload.attempt ||
       thread.deletedAt !== null ||
+      thread.archivedAt !== null ||
       thread.settledOverride === "settled"
     ) {
       return;
@@ -1358,6 +1359,7 @@ const make = Effect.gen(function* () {
           latestUsageLimitResume.nextAttemptAt !== null ||
           latestUsageLimitResume.attempt !== event.payload.attempt ||
           latestThread.deletedAt !== null ||
+          latestThread.archivedAt !== null ||
           latestThread.settledOverride === "settled"
         ) {
           return;

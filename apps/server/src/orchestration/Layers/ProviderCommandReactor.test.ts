@@ -1104,6 +1104,78 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
+  effectIt.effect("does not resume an attempted timer after the thread is archived", () =>
+    Effect.gen(function* () {
+      const blockedSessionStarted = yield* Deferred.make<void>();
+      const releaseBlockedSession = yield* Deferred.make<void>();
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          createSecondThread: true,
+          startSessionEffect: (session) =>
+            session.threadId === ThreadId.make("thread-2")
+              ? Deferred.succeed(blockedSessionStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseBlockedSession)),
+                  Effect.as(session),
+                )
+              : Effect.succeed(session),
+        }),
+      );
+      const resumeAt = "2099-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-block-reactor-worker-for-archive"),
+        threadId: ThreadId.make("thread-2"),
+        message: {
+          messageId: asMessageId("message-block-reactor-worker-for-archive"),
+          role: "user",
+          text: "block the worker",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+      yield* Deferred.await(blockedSessionStarted);
+
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.schedule",
+        commandId: CommandId.make("cmd-archived-resume-schedule"),
+        threadId: ThreadId.make("thread-1"),
+        resumeAt,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.attempt",
+        commandId: CommandId.make("cmd-archived-resume-attempt"),
+        threadId: ThreadId.make("thread-1"),
+        expectedAttemptAt: resumeAt,
+        createdAt: resumeAt,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("cmd-archive-before-resume-processing"),
+        threadId: ThreadId.make("thread-1"),
+      });
+
+      yield* Deferred.succeed(releaseBlockedSession, undefined);
+      yield* Effect.promise(() => harness.drain());
+
+      expect(
+        harness.sendTurn.mock.calls.some(
+          ([input]) =>
+            typeof input === "object" &&
+            input !== null &&
+            "input" in input &&
+            input.input === "Continue from where you left off.",
+        ),
+      ).toBe(false);
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.archivedAt).not.toBeNull();
+      expect(thread?.usageLimitResume).toBeNull();
+    }),
+  );
+
   effectIt.effect("does not resume an attempted timer after the thread is deleted", () =>
     Effect.gen(function* () {
       const blockedSessionStarted = yield* Deferred.make<void>();

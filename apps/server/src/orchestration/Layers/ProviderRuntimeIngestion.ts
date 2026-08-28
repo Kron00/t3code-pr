@@ -1955,7 +1955,7 @@ const make = Effect.gen(function* () {
       if (
         shouldApplyThreadLifecycle &&
         event.type === "turn.completed" &&
-        normalizeRuntimeTurnState(event.payload.state) === "completed" &&
+        normalizeRuntimeTurnState(event.payload.state) !== "failed" &&
         thread.usageLimitResume != null
       ) {
         yield* orchestrationEngine.dispatch({

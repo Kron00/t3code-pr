@@ -209,7 +209,57 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
     }),
   );
 
-  it.effect("rejects archived timers and rearms their schedule on unarchive", () =>
+  it.effect("cancels automatic resume when a thread is archived or interrupted", () =>
+    Effect.gen(function* () {
+      const archived = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.archive",
+          commandId: CommandId.make("cmd-archive-resume"),
+          threadId: ThreadId.make("thread-1"),
+        },
+        readModel: makeReadModel({ nextAttemptAt: FIRST_ATTEMPT, attempt: 2 }),
+      });
+      const archivedEvents = Array.isArray(archived) ? archived : [archived];
+      expect(archivedEvents.map((event) => event.type)).toEqual([
+        "thread.usage-limit-resume-cancelled",
+        "thread.archived",
+      ]);
+
+      const archivedInFlight = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.archive",
+          commandId: CommandId.make("cmd-archive-in-flight-resume"),
+          threadId: ThreadId.make("thread-1"),
+        },
+        readModel: makeReadModel({ nextAttemptAt: null, attempt: 2 }),
+      });
+      const archivedInFlightEvents = Array.isArray(archivedInFlight)
+        ? archivedInFlight
+        : [archivedInFlight];
+      expect(archivedInFlightEvents.map((event) => event.type)).toEqual([
+        "thread.usage-limit-resume-cancelled",
+        "thread.turn-interrupt-requested",
+        "thread.archived",
+      ]);
+
+      const interrupted = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.interrupt",
+          commandId: CommandId.make("cmd-interrupt-resume"),
+          threadId: ThreadId.make("thread-1"),
+          createdAt: NOW,
+        },
+        readModel: makeReadModel({ nextAttemptAt: null, attempt: 2 }),
+      });
+      const interruptedEvents = Array.isArray(interrupted) ? interrupted : [interrupted];
+      expect(interruptedEvents.map((event) => event.type)).toEqual([
+        "thread.usage-limit-resume-cancelled",
+        "thread.turn-interrupt-requested",
+      ]);
+    }),
+  );
+
+  it.effect("rejects archived timers and clears legacy resume state on unarchive", () =>
     Effect.gen(function* () {
       const archivedReadModel = makeReadModel(
         { nextAttemptAt: FIRST_ATTEMPT, attempt: 2 },
@@ -238,17 +288,25 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
       });
       const unarchivedEvents = Array.isArray(unarchived) ? unarchived : [unarchived];
       expect(unarchivedEvents.map((event) => event.type)).toEqual([
+        "thread.usage-limit-resume-cancelled",
         "thread.unarchived",
-        "thread.usage-limit-resume-scheduled",
       ]);
-      const scheduledEvent = unarchivedEvents[1];
-      if (scheduledEvent?.type !== "thread.usage-limit-resume-scheduled") {
-        return;
-      }
-      expect(scheduledEvent.payload).toMatchObject({
-        resumeAt: FIRST_ATTEMPT,
-        attempt: 2,
+
+      const retried = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.usage-limit-resume.retry",
+          commandId: CommandId.make("cmd-archived-retry"),
+          threadId: ThreadId.make("thread-1"),
+          resumeAt: SECOND_ATTEMPT,
+          attempt: 2,
+          createdAt: FIRST_ATTEMPT,
+        },
+        readModel: makeReadModel({ nextAttemptAt: null, attempt: 2 }, null, NOW),
       });
+      const retriedEvents = Array.isArray(retried) ? retried : [retried];
+      expect(retriedEvents.map((event) => event.type)).toEqual([
+        "thread.usage-limit-resume-cancelled",
+      ]);
     }),
   );
 });
