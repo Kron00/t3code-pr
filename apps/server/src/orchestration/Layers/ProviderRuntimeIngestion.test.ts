@@ -2715,6 +2715,91 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("runtime exploded");
   });
 
+  it("reschedules an active automatic resume from a typed usage-limit error", async () => {
+    const harness = await createHarness();
+    const attemptedAt = "2099-01-01T00:00:00.000Z";
+    const providerRetryAt = "2099-01-01T01:00:00.000Z";
+
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.schedule",
+      commandId: CommandId.make("cmd-runtime-resume-schedule"),
+      threadId: ThreadId.make("thread-1"),
+      resumeAt: attemptedAt,
+    });
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.attempt",
+      commandId: CommandId.make("cmd-runtime-resume-attempt"),
+      threadId: ThreadId.make("thread-1"),
+      expectedAttemptAt: attemptedAt,
+      createdAt: attemptedAt,
+    });
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("evt-runtime-usage-limit"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: attemptedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-usage-limit"),
+      payload: {
+        message: "Usage limit reached",
+        class: "usage_limit",
+        retryAt: providerRetryAt,
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.lastErrorClass === "usage_limit" && entry.usageLimitResume?.attempt === 1,
+    );
+    expect(thread.session?.retryAt).toBe(providerRetryAt);
+    expect(thread.usageLimitResume).toEqual({
+      nextAttemptAt: "2099-01-01T01:00:02.000Z",
+      attempt: 1,
+    });
+  });
+
+  it("clears automatic resume after a successful provider turn", async () => {
+    const harness = await createHarness();
+    const attemptedAt = "2099-01-01T00:00:00.000Z";
+
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.schedule",
+      commandId: CommandId.make("cmd-successful-resume-schedule"),
+      threadId: ThreadId.make("thread-1"),
+      resumeAt: attemptedAt,
+    });
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.attempt",
+      commandId: CommandId.make("cmd-successful-resume-attempt"),
+      threadId: ThreadId.make("thread-1"),
+      expectedAttemptAt: attemptedAt,
+      createdAt: attemptedAt,
+    });
+
+    const attempted = await waitForThread(
+      harness.readModel,
+      (entry) => entry.usageLimitResume?.nextAttemptAt === null,
+    );
+    expect(attempted.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-successful-auto-resume"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: attemptedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-successful-auto-resume"),
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.usageLimitResume === null,
+    );
+    expect(thread.usageLimitResume).toBeNull();
+  });
+
   it("records runtime.error activities from the typed payload message", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

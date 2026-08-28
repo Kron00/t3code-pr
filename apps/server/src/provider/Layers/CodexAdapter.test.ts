@@ -1114,6 +1114,60 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps usage-limit errors with the latest account reset timestamp", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const runtimeErrorFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "runtime.error"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit({
+        id: asEventId("evt-rate-limits"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-08-28T18:00:00.000Z",
+        method: "account/rateLimits/updated",
+        payload: {
+          rateLimits: {
+            primary: { usedPercent: 100, resetsAt: 1_787_944_200 },
+            secondary: { usedPercent: 20, resetsAt: 1_788_548_200 },
+            rateLimitReachedType: "rate_limit_reached",
+          },
+        },
+      } satisfies ProviderEvent);
+      yield* runtime.emit({
+        id: asEventId("evt-usage-limit"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: "2026-08-28T18:00:01.000Z",
+        method: "error",
+        message: "You have no weighted tokens left",
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          willRetry: false,
+          error: {
+            message: "You have no weighted tokens left",
+            codexErrorInfo: "usageLimitExceeded",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const runtimeError = yield* Fiber.join(runtimeErrorFiber);
+      NodeAssert.equal(runtimeError._tag, "Some");
+      if (runtimeError._tag !== "Some" || runtimeError.value.type !== "runtime.error") {
+        return;
+      }
+      NodeAssert.equal(runtimeError.value.payload.class, "usage_limit");
+      NodeAssert.equal(runtimeError.value.payload.retryAt, "2026-08-28T19:10:00.000Z");
+    }),
+  );
+
   it.effect("preserves request type when mapping serverRequest/resolved", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

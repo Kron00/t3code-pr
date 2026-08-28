@@ -45,6 +45,7 @@ import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
+import { nextUsageLimitRetryAt } from "../../provider/usageLimits.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 const providerTaskKey = (threadId: ThreadId, taskId: string) => `${threadId}:${taskId}`;
@@ -441,6 +442,8 @@ export function runtimeEventToActivities(
           summary: "Runtime error",
           payload: {
             message: truncateDetail(event.payload.message),
+            ...(event.payload.class !== undefined ? { class: event.payload.class } : {}),
+            ...(event.payload.retryAt !== undefined ? { retryAt: event.payload.retryAt } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1619,6 +1622,10 @@ const make = Effect.gen(function* () {
               : status === "ready"
                 ? null
                 : (thread.session?.lastError ?? null);
+        const preservesErrorMetadata =
+          (event.type === "session.state.changed" && event.payload.state === "error") ||
+          (event.type === "turn.completed" &&
+            normalizeRuntimeTurnState(event.payload.state) === "failed");
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
@@ -1655,6 +1662,12 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: nextActiveTurnId,
               lastError,
+              ...(preservesErrorMetadata && thread.session?.lastErrorClass !== undefined
+                ? { lastErrorClass: thread.session.lastErrorClass }
+                : {}),
+              ...(preservesErrorMetadata && thread.session?.retryAt !== undefined
+                ? { retryAt: thread.session.retryAt }
+                : {}),
               updatedAt: now,
             },
             createdAt: now,
@@ -1905,11 +1918,50 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: eventTurnId ?? null,
               lastError: runtimeErrorMessage,
+              ...(event.payload.class !== undefined ? { lastErrorClass: event.payload.class } : {}),
+              ...(event.payload.retryAt !== undefined ? { retryAt: event.payload.retryAt } : {}),
               updatedAt: now,
             },
             createdAt: now,
           });
         }
+
+        if (thread.usageLimitResume?.nextAttemptAt === null) {
+          if (event.payload.class === "usage_limit") {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.usage-limit-resume.retry",
+              commandId: yield* providerCommandId(event, "usage-limit-resume-retry"),
+              threadId: thread.id,
+              resumeAt: nextUsageLimitRetryAt({
+                now,
+                attempt: thread.usageLimitResume.attempt,
+                ...(event.payload.retryAt !== undefined
+                  ? { providerRetryAt: event.payload.retryAt }
+                  : {}),
+              }),
+              attempt: thread.usageLimitResume.attempt,
+              createdAt: now,
+            });
+          } else {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.usage-limit-resume.cancel",
+              commandId: yield* providerCommandId(event, "usage-limit-resume-cancel"),
+              threadId: thread.id,
+            });
+          }
+        }
+      }
+
+      if (
+        event.type === "turn.completed" &&
+        normalizeRuntimeTurnState(event.payload.state) === "completed" &&
+        thread.usageLimitResume != null
+      ) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.usage-limit-resume.cancel",
+          commandId: yield* providerCommandId(event, "usage-limit-resume-completed"),
+          threadId: thread.id,
+        });
       }
 
       if (event.type === "thread.metadata.updated" && event.payload.name) {

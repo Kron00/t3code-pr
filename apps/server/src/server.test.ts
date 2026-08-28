@@ -1430,6 +1430,16 @@ const NodeHttpServerTestWithWsDeflate = HttpServer.layerTestClient.pipe(
 );
 
 it.layer(NodeServices.layer)("server router seam", (it) => {
+  it("streams usage-limit resume state changes to active thread clients", () => {
+    for (const type of [
+      "thread.usage-limit-resume-scheduled",
+      "thread.usage-limit-resume-cancelled",
+      "thread.usage-limit-resume-attempted",
+    ] as const) {
+      assertTrue(isThreadDetailEvent({ type } as OrchestrationEvent));
+    }
+  });
+
   it.effect("parks HTTP ingress until command readiness", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

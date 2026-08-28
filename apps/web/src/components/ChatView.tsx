@@ -27,6 +27,7 @@ import {
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
+import { initialUsageLimitResumeAt } from "@t3tools/client-runtime/state/usage-limit-resume";
 import {
   changeRequestAutoSettles,
   effectiveSettled,
@@ -1314,6 +1315,12 @@ function ChatViewContent(props: ChatViewProps) {
   const revertThreadCheckpoint = useAtomCommand(threadEnvironment.revertCheckpoint, {
     reportFailure: false,
   });
+  const scheduleUsageLimitResume = useAtomCommand(threadEnvironment.scheduleUsageLimitResume, {
+    reportFailure: false,
+  });
+  const cancelUsageLimitResume = useAtomCommand(threadEnvironment.cancelUsageLimitResume, {
+    reportFailure: false,
+  });
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const { environments } = useEnvironments();
@@ -1631,6 +1638,67 @@ function ChatViewContent(props: ChatViewProps) {
   // session.lastError. Bump a tick so the banner hides immediately. Mirrors
   // the branch mismatch banner.
   const [, setThreadErrorBannerDismissTick] = useState(0);
+  const usageLimitResume = activeServerThread?.usageLimitResume ?? null;
+  const isUsageLimitError = activeServerThread?.session?.lastErrorClass === "usage_limit";
+  const showUsageLimitResumeBanner = isUsageLimitError || usageLimitResume !== null;
+  const displayedThreadError = showUsageLimitResumeBanner
+    ? (threadError ?? "T3 is resuming this thread now.")
+    : visibleThreadError;
+  const usageLimitActionDescription =
+    usageLimitResume?.nextAttemptAt === null
+      ? "Trying again now. Cancel to stop further automatic retries."
+      : usageLimitResume?.nextAttemptAt
+        ? `Automatic resume scheduled for ${new Intl.DateTimeFormat(undefined, {
+            dateStyle: "medium",
+            timeStyle: "short",
+          }).format(new Date(usageLimitResume.nextAttemptAt))}.`
+        : undefined;
+  const [usageLimitActionPending, setUsageLimitActionPending] = useState(false);
+  const handleUsageLimitResumeAction = useCallback(async () => {
+    if (!isServerThread || usageLimitActionPending) {
+      return;
+    }
+    setUsageLimitActionPending(true);
+    try {
+      const result =
+        usageLimitResume === null
+          ? await scheduleUsageLimitResume({
+              environmentId,
+              input: {
+                threadId,
+                resumeAt: initialUsageLimitResumeAt(activeServerThread?.session?.retryAt),
+              },
+            })
+          : await cancelUsageLimitResume({
+              environmentId,
+              input: { threadId },
+            });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title:
+              usageLimitResume === null
+                ? "Failed to schedule automatic resume"
+                : "Failed to cancel automatic resume",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    } finally {
+      setUsageLimitActionPending(false);
+    }
+  }, [
+    activeServerThread?.session?.retryAt,
+    cancelUsageLimitResume,
+    environmentId,
+    isServerThread,
+    scheduleUsageLimitResume,
+    threadId,
+    usageLimitActionPending,
+    usageLimitResume,
+  ]);
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   // Plan mode is legacy (Settings → Beta). With the flag off the effective
   // mode is forced to "default" — even for threads with a stored plan mode —
@@ -2849,7 +2917,7 @@ function ChatViewContent(props: ChatViewProps) {
   )
     ? activeProviderStatus
     : null;
-  const hasTimelineTopBanner = Boolean(visibleThreadError) || visibleProviderStatus !== null;
+  const hasTimelineTopBanner = Boolean(displayedThreadError) || visibleProviderStatus !== null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -6894,12 +6962,28 @@ function ChatViewContent(props: ChatViewProps) {
         </WorkspacePageHeader>
 
         <ThreadErrorBanner
-          error={visibleThreadError}
-          onDismiss={() => {
-            setThreadError(activeThread.id, null);
-            dismissThreadErrorBannerForSession(threadErrorBannerKey);
-            setThreadErrorBannerDismissTick((tick) => tick + 1);
-          }}
+          error={displayedThreadError}
+          actionLabel={
+            showUsageLimitResumeBanner
+              ? usageLimitResume === null
+                ? "Resume when available"
+                : "Cancel auto-resume"
+              : undefined
+          }
+          actionDescription={usageLimitActionDescription}
+          actionPending={usageLimitActionPending}
+          onAction={
+            showUsageLimitResumeBanner ? () => void handleUsageLimitResumeAction() : undefined
+          }
+          onDismiss={
+            showUsageLimitResumeBanner
+              ? undefined
+              : () => {
+                  setThreadError(activeThread.id, null);
+                  dismissThreadErrorBannerForSession(threadErrorBannerKey);
+                  setThreadErrorBannerDismissTick((tick) => tick + 1);
+                }
+          }
         />
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">

@@ -1,0 +1,17 @@
+import type { IsoDateTime } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+
+const FALLBACK_RETRY_DELAY_MS = 5 * 60 * 1_000;
+
+export function initialUsageLimitResumeAt(
+  providerRetryAt: IsoDateTime | undefined,
+  nowMs = DateTime.toEpochMillis(DateTime.nowUnsafe()),
+): IsoDateTime {
+  const providerRetryAtMs =
+    providerRetryAt === undefined ? Number.NaN : Date.parse(providerRetryAt);
+  const resumeAtMs =
+    Number.isFinite(providerRetryAtMs) && providerRetryAtMs > nowMs
+      ? providerRetryAtMs
+      : nowMs + FALLBACK_RETRY_DELAY_MS;
+  return DateTime.formatIso(DateTime.makeUnsafe(resumeAtMs)) as IsoDateTime;
+}
