@@ -1303,6 +1303,7 @@ const make = Effect.gen(function* () {
       usageLimitResume === null ||
       usageLimitResume.nextAttemptAt !== null ||
       usageLimitResume.attempt !== event.payload.attempt ||
+      thread.deletedAt !== null ||
       thread.settledOverride === "settled"
     ) {
       return;

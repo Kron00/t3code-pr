@@ -21,6 +21,7 @@ function makeReadModel(
   usageLimitResume: OrchestrationThread["usageLimitResume"] = null,
   settledOverride: OrchestrationThread["settledOverride"] = null,
   archivedAt: string | null = null,
+  deletedAt: string | null = null,
 ): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
@@ -42,7 +43,7 @@ function makeReadModel(
         settledOverride,
         settledAt: settledOverride === "settled" ? NOW : null,
         usageLimitResume,
-        deletedAt: null,
+        deletedAt,
         messages: [],
         proposedPlans: [],
         activities: [],
@@ -183,6 +184,24 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
           createdAt: FIRST_ATTEMPT,
         },
         readModel: makeReadModel({ nextAttemptAt: FIRST_ATTEMPT, attempt: 0 }, "settled"),
+      });
+      const attemptedEvents = Array.isArray(attempted) ? attempted : [attempted];
+      expect(attemptedEvents).toHaveLength(1);
+      expect(attemptedEvents[0]?.type).toBe("thread.usage-limit-resume-cancelled");
+    }),
+  );
+
+  it.effect("rejects a timer after its thread is deleted", () =>
+    Effect.gen(function* () {
+      const attempted = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.usage-limit-resume.attempt",
+          commandId: CommandId.make("cmd-deleted-attempt"),
+          threadId: ThreadId.make("thread-1"),
+          expectedAttemptAt: FIRST_ATTEMPT,
+          createdAt: FIRST_ATTEMPT,
+        },
+        readModel: makeReadModel({ nextAttemptAt: FIRST_ATTEMPT, attempt: 0 }, null, null, NOW),
       });
       const attemptedEvents = Array.isArray(attempted) ? attempted : [attempted];
       expect(attemptedEvents).toHaveLength(1);

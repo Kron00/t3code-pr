@@ -825,7 +825,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const current = thread.usageLimitResume ?? null;
-      if (thread.settledOverride === "settled" && current !== null) {
+      if ((thread.deletedAt !== null || thread.settledOverride === "settled") && current !== null) {
         return {
           ...(yield* withEventBase({
             aggregateKind: "thread",
