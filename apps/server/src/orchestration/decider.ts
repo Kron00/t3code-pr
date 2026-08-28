@@ -34,6 +34,10 @@ function isStoppedByUsageLimit(thread: Pick<OrchestrationThread, "session">): bo
   return thread.session?.status === "error" && thread.session.lastErrorClass === "usage_limit";
 }
 
+function hasActiveSession(thread: Pick<OrchestrationThread, "session">): boolean {
+  return thread.session?.status === "starting" || thread.session?.status === "running";
+}
+
 /**
  * Blocked-on-you work derived from the thread's retained activities: an
  * approval or user-input request with no later resolution for the same
@@ -919,7 +923,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (
         (thread.deletedAt !== null ||
           thread.settledOverride === "settled" ||
-          !isStoppedByUsageLimit(thread)) &&
+          hasActiveSession(thread)) &&
         current !== null
       ) {
         return {

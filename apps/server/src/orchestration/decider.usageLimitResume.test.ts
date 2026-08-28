@@ -170,7 +170,7 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
     }),
   );
 
-  it.effect("rejects scheduling and cancels an attempt after the thread becomes active", () =>
+  it.effect("requires a usage limit to schedule and only cancels attempts for active work", () =>
     Effect.gen(function* () {
       const runningSession: OrchestrationThread["session"] = {
         threadId: ThreadId.make("thread-1"),
@@ -212,6 +212,34 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
       expect(attemptedEvents.map((event) => event.type)).toEqual([
         "thread.usage-limit-resume-cancelled",
       ]);
+
+      const readySession: OrchestrationThread["session"] = {
+        ...runningSession,
+        status: "ready",
+      };
+      const metadataClearedAttempt = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.usage-limit-resume.attempt",
+          commandId: CommandId.make("cmd-metadata-cleared-attempt"),
+          threadId: ThreadId.make("thread-1"),
+          expectedAttemptAt: FIRST_ATTEMPT,
+          createdAt: FIRST_ATTEMPT,
+        },
+        readModel: makeReadModel(
+          { nextAttemptAt: FIRST_ATTEMPT, attempt: 0 },
+          null,
+          null,
+          null,
+          readySession,
+        ),
+      });
+      const metadataClearedEvents = Array.isArray(metadataClearedAttempt)
+        ? metadataClearedAttempt
+        : [metadataClearedAttempt];
+      expect(metadataClearedEvents[0]).toMatchObject({
+        type: "thread.usage-limit-resume-attempted",
+        payload: { shouldResume: true },
+      });
     }),
   );
 
