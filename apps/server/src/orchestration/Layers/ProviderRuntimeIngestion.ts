@@ -1926,7 +1926,7 @@ const make = Effect.gen(function* () {
           });
         }
 
-        if (thread.usageLimitResume?.nextAttemptAt === null) {
+        if (shouldApplyRuntimeError && thread.usageLimitResume?.nextAttemptAt === null) {
           if (event.payload.class === "usage_limit") {
             yield* orchestrationEngine.dispatch({
               type: "thread.usage-limit-resume.retry",
@@ -1953,6 +1953,7 @@ const make = Effect.gen(function* () {
       }
 
       if (
+        shouldApplyThreadLifecycle &&
         event.type === "turn.completed" &&
         normalizeRuntimeTurnState(event.payload.state) === "completed" &&
         thread.usageLimitResume != null

@@ -2284,6 +2284,8 @@ describe("ClaudeAdapterLive", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
+      const apiErrorMessage =
+        "API Error: Request rejected (429) · Usage limit reached. Try again later.";
       const runtimeEvents: ProviderRuntimeEvent[] = [];
       const sawRuntimeError = yield* Deferred.make<ProviderRuntimeEvent>();
       const sawTurnCompleted = yield* Deferred.make<ProviderRuntimeEvent>();
@@ -2292,7 +2294,7 @@ describe("ClaudeAdapterLive", () => {
           runtimeEvents.push(event);
         }).pipe(
           Effect.andThen(
-            event.type === "runtime.error"
+            event.type === "runtime.error" && event.payload.message === apiErrorMessage
               ? Deferred.succeed(sawRuntimeError, event).pipe(Effect.asVoid)
               : event.type === "turn.completed"
                 ? Deferred.succeed(sawTurnCompleted, event).pipe(Effect.asVoid)
@@ -2312,8 +2314,15 @@ describe("ClaudeAdapterLive", () => {
         attachments: [],
       });
 
-      const apiErrorMessage =
-        "API Error: Request rejected (429) · Usage limit reached. Try again later.";
+      harness.query.emit({
+        type: "rate_limit_event",
+        session_id: "sdk-session-api-429",
+        uuid: "rate-limit-api-429",
+        rate_limit_info: {
+          status: "rejected",
+          resetsAt: 1_787_944_200,
+        },
+      } as unknown as SDKMessage);
       harness.query.emit({
         type: "assistant",
         session_id: "sdk-session-api-429",
@@ -2344,6 +2353,7 @@ describe("ClaudeAdapterLive", () => {
       if (runtimeError.type === "runtime.error") {
         assert.equal(runtimeError.payload.class, "usage_limit");
         assert.equal(runtimeError.payload.message, apiErrorMessage);
+        assert.equal(runtimeError.payload.retryAt, "2026-08-28T19:10:00.000Z");
       }
 
       const completed = yield* Deferred.await(sawTurnCompleted);

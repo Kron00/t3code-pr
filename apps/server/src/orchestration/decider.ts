@@ -543,6 +543,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         });
       }
+      if (thread.usageLimitResume != null) {
+        companionEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.usage-limit-resume-cancelled",
+          payload: {
+            threadId: command.threadId,
+            updatedAt: occurredAt,
+          },
+        });
+      }
       return companionEvents.length > 0 ? [settledEvent, ...companionEvents] : settledEvent;
     }
 
@@ -788,6 +803,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const current = thread.usageLimitResume ?? null;
+      if (thread.settledOverride === "settled" && current !== null) {
+        return {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.usage-limit-resume-cancelled",
+          payload: {
+            threadId: command.threadId,
+            updatedAt: command.createdAt,
+          },
+        };
+      }
       const shouldResume =
         current?.nextAttemptAt === command.expectedAttemptAt &&
         Date.parse(command.expectedAttemptAt) <= Date.parse(command.createdAt);

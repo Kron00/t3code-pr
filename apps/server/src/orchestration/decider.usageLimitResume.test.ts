@@ -19,6 +19,7 @@ const SECOND_ATTEMPT = "1970-01-01T00:20:00.000Z";
 
 function makeReadModel(
   usageLimitResume: OrchestrationThread["usageLimitResume"] = null,
+  settledOverride: OrchestrationThread["settledOverride"] = null,
 ): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
@@ -37,8 +38,8 @@ function makeReadModel(
         createdAt: NOW,
         updatedAt: NOW,
         archivedAt: null,
-        settledOverride: null,
-        settledAt: null,
+        settledOverride,
+        settledAt: settledOverride === "settled" ? NOW : null,
         usageLimitResume,
         deletedAt: null,
         messages: [],
@@ -153,6 +154,38 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
         true,
       );
       expect(events.some((event) => event.type === "thread.turn-start-requested")).toBe(true);
+    }),
+  );
+
+  it.effect("clears automatic resume on settlement and rejects a settled timer", () =>
+    Effect.gen(function* () {
+      const settled = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.settle",
+          commandId: CommandId.make("cmd-settle"),
+          threadId: ThreadId.make("thread-1"),
+        },
+        readModel: makeReadModel({ nextAttemptAt: FIRST_ATTEMPT, attempt: 0 }),
+      });
+      const settledEvents = Array.isArray(settled) ? settled : [settled];
+      expect(settledEvents.map((event) => event.type)).toEqual([
+        "thread.settled",
+        "thread.usage-limit-resume-cancelled",
+      ]);
+
+      const attempted = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.usage-limit-resume.attempt",
+          commandId: CommandId.make("cmd-settled-attempt"),
+          threadId: ThreadId.make("thread-1"),
+          expectedAttemptAt: FIRST_ATTEMPT,
+          createdAt: FIRST_ATTEMPT,
+        },
+        readModel: makeReadModel({ nextAttemptAt: FIRST_ATTEMPT, attempt: 0 }, "settled"),
+      });
+      const attemptedEvents = Array.isArray(attempted) ? attempted : [attempted];
+      expect(attemptedEvents).toHaveLength(1);
+      expect(attemptedEvents[0]?.type).toBe("thread.usage-limit-resume-cancelled");
     }),
   );
 });

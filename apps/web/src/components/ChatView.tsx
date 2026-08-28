@@ -108,6 +108,7 @@ import {
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
 import { getAnchoredTurnMetrics, type TimelineScrollMode } from "./chat/timelineScrollAnchoring";
+import { snoozeWakeDescription } from "./Sidebar.snooze";
 import {
   buildPendingUserInputAnswers,
   derivePendingUserInputProgress,
@@ -1642,23 +1643,35 @@ function ChatViewContent(props: ChatViewProps) {
   const isUsageLimitError = activeServerThread?.session?.lastErrorClass === "usage_limit";
   const showUsageLimitResumeBanner = isUsageLimitError || usageLimitResume !== null;
   const displayedThreadError = showUsageLimitResumeBanner
-    ? (threadError ?? "T3 is resuming this thread now.")
+    ? (threadError ??
+      (usageLimitResume === null
+        ? "This thread reached its usage limit."
+        : usageLimitResume.nextAttemptAt === null
+          ? "T3 is resuming this thread now."
+          : "T3 will resume this thread automatically."))
     : visibleThreadError;
   const usageLimitActionDescription =
     usageLimitResume?.nextAttemptAt === null
       ? "Trying again now. Cancel to stop further automatic retries."
       : usageLimitResume?.nextAttemptAt
-        ? `Automatic resume scheduled for ${new Intl.DateTimeFormat(undefined, {
-            dateStyle: "medium",
-            timeStyle: "short",
-          }).format(new Date(usageLimitResume.nextAttemptAt))}.`
+        ? `Automatic resume scheduled for ${snoozeWakeDescription(
+            usageLimitResume.nextAttemptAt,
+            new Date(),
+            timestampFormat,
+          )}.`
         : undefined;
-  const [usageLimitActionPending, setUsageLimitActionPending] = useState(false);
+  const [usageLimitActionPendingThreadKeys, setUsageLimitActionPendingThreadKeys] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const usageLimitActionPending = usageLimitActionPendingThreadKeys.has(routeThreadKey);
   const handleUsageLimitResumeAction = useCallback(async () => {
     if (!isServerThread || usageLimitActionPending) {
       return;
     }
-    setUsageLimitActionPending(true);
+    const actionThreadKey = routeThreadKey;
+    setUsageLimitActionPendingThreadKeys((pendingThreadKeys) =>
+      new Set(pendingThreadKeys).add(actionThreadKey),
+    );
     try {
       const result =
         usageLimitResume === null
@@ -1687,13 +1700,21 @@ function ChatViewContent(props: ChatViewProps) {
         );
       }
     } finally {
-      setUsageLimitActionPending(false);
+      setUsageLimitActionPendingThreadKeys((pendingThreadKeys) => {
+        if (!pendingThreadKeys.has(actionThreadKey)) {
+          return pendingThreadKeys;
+        }
+        const nextPendingThreadKeys = new Set(pendingThreadKeys);
+        nextPendingThreadKeys.delete(actionThreadKey);
+        return nextPendingThreadKeys;
+      });
     }
   }, [
     activeServerThread?.session?.retryAt,
     cancelUsageLimitResume,
     environmentId,
     isServerThread,
+    routeThreadKey,
     scheduleUsageLimitResume,
     threadId,
     usageLimitActionPending,
@@ -6976,7 +6997,7 @@ function ChatViewContent(props: ChatViewProps) {
             showUsageLimitResumeBanner ? () => void handleUsageLimitResumeAction() : undefined
           }
           onDismiss={
-            showUsageLimitResumeBanner
+            usageLimitResume !== null
               ? undefined
               : () => {
                   setThreadError(activeThread.id, null);

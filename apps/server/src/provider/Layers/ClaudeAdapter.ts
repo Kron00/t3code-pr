@@ -495,6 +495,13 @@ function resultApiError(
   };
 }
 
+function usageLimitWithKnownRetryAt(
+  next: ProviderUsageLimit | undefined,
+  previous: ProviderUsageLimit | undefined,
+): ProviderUsageLimit | undefined {
+  return next?.retryAt !== undefined ? next : (previous ?? next);
+}
+
 function isInterruptedResult(result: SDKResultMessage): boolean {
   // The CLI stamps user aborts explicitly: interrupting mid-tool-call yields
   // "aborted_tools" (with an internal "[ede_diagnostic] ..." error and
@@ -3010,8 +3017,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const apiErrorMessage = assistantApiErrorMessage(message);
     if (apiErrorMessage !== undefined) {
       context.apiErrorMessage = apiErrorMessage;
-      context.usageLimitError =
-        providerUsageLimitFromError({ message: apiErrorMessage, detail: message }) ?? undefined;
+      context.usageLimitError = usageLimitWithKnownRetryAt(
+        providerUsageLimitFromError({ message: apiErrorMessage, detail: message }) ?? undefined,
+        context.usageLimitError,
+      );
       context.lastAssistantUuid = message.uuid;
       yield* updateResumeCursor(context);
       return;
@@ -3115,7 +3124,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         context,
         errorMessage ?? "Claude turn failed.",
         apiError === undefined ? undefined : message,
-        apiError?.usageLimit ?? context.usageLimitError,
+        usageLimitWithKnownRetryAt(apiError?.usageLimit, context.usageLimitError),
       );
     }
 

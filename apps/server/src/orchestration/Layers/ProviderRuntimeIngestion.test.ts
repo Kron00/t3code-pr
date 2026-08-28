@@ -2800,6 +2800,106 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.usageLimitResume).toBeNull();
   });
 
+  it("keeps automatic resume active when a superseded turn completes", async () => {
+    const harness = await createHarness();
+    const attemptedAt = "2099-01-01T00:00:00.000Z";
+
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.schedule",
+      commandId: CommandId.make("cmd-stale-completion-resume-schedule"),
+      threadId: ThreadId.make("thread-1"),
+      resumeAt: attemptedAt,
+    });
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.attempt",
+      commandId: CommandId.make("cmd-stale-completion-resume-attempt"),
+      threadId: ThreadId.make("thread-1"),
+      expectedAttemptAt: attemptedAt,
+      createdAt: attemptedAt,
+    });
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-current-auto-resume-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: attemptedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-current-auto-resume"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.activeTurnId === "turn-current-auto-resume",
+    );
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-superseded-auto-resume-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: attemptedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-superseded-auto-resume"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    );
+    expect(thread?.session?.activeTurnId).toBe("turn-current-auto-resume");
+    expect(thread?.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });
+  });
+
+  it("ignores a superseded runtime error while an automatic resume is active", async () => {
+    const harness = await createHarness();
+    const attemptedAt = "2099-01-01T00:00:00.000Z";
+
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.schedule",
+      commandId: CommandId.make("cmd-stale-error-resume-schedule"),
+      threadId: ThreadId.make("thread-1"),
+      resumeAt: attemptedAt,
+    });
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.attempt",
+      commandId: CommandId.make("cmd-stale-error-resume-attempt"),
+      threadId: ThreadId.make("thread-1"),
+      expectedAttemptAt: attemptedAt,
+      createdAt: attemptedAt,
+    });
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-current-auto-resume-before-stale-error"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: attemptedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-current-before-stale-error"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.activeTurnId === "turn-current-before-stale-error",
+    );
+
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("evt-superseded-runtime-error"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: attemptedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-superseded-runtime-error"),
+      payload: {
+        message: "Old turn failed",
+        class: "usage_limit",
+        retryAt: "2099-01-01T01:00:00.000Z",
+      },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    );
+    expect(thread?.session?.activeTurnId).toBe("turn-current-before-stale-error");
+    expect(thread?.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });
+  });
+
   it("records runtime.error activities from the typed payload message", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

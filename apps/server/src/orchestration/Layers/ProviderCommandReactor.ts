@@ -1298,6 +1298,15 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const usageLimitResume = thread.usageLimitResume ?? null;
+    if (
+      usageLimitResume === null ||
+      usageLimitResume.nextAttemptAt !== null ||
+      usageLimitResume.attempt !== event.payload.attempt ||
+      thread.settledOverride === "settled"
+    ) {
+      return;
+    }
     yield* ensureThreadWorktree(thread);
 
     const retryOrCancel = (cause: Cause.Cause<unknown>) =>
@@ -1656,6 +1665,27 @@ const make = Effect.gen(function* () {
         ).pipe(Effect.as([]));
       }),
     );
+    const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
+      if (
+        (event.type === "thread.meta-updated" && event.payload.regenerateTitle === true) ||
+        event.type === "thread.runtime-mode-set" ||
+        event.type === "thread.turn-start-requested" ||
+        event.type === "thread.turn-interrupt-requested" ||
+        event.type === "thread.approval-response-requested" ||
+        event.type === "thread.user-input-response-requested" ||
+        event.type === "thread.session-stop-requested" ||
+        event.type === "thread.usage-limit-resume-scheduled" ||
+        event.type === "thread.usage-limit-resume-cancelled" ||
+        event.type === "thread.usage-limit-resume-attempted"
+      ) {
+        return yield* worker.enqueue(event);
+      }
+    });
+
+    // Acquire the hot-stream subscription before reading recovery state. Any
+    // event committed during that query is buffered by the subscription and
+    // cannot leave a newer durable resume without a matching timer.
+    const domainEventsPull = yield* Stream.toPull(orchestrationEngine.streamDomainEvents);
     const pendingUsageLimitResumes = yield* projectionSnapshotQuery.getCommandReadModel().pipe(
       Effect.map((readModel) =>
         readModel.threads.flatMap((thread) =>
@@ -1676,24 +1706,9 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.as([])),
       ),
     );
-    const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
-      if (
-        (event.type === "thread.meta-updated" && event.payload.regenerateTitle === true) ||
-        event.type === "thread.runtime-mode-set" ||
-        event.type === "thread.turn-start-requested" ||
-        event.type === "thread.turn-interrupt-requested" ||
-        event.type === "thread.approval-response-requested" ||
-        event.type === "thread.user-input-response-requested" ||
-        event.type === "thread.session-stop-requested" ||
-        event.type === "thread.usage-limit-resume-scheduled" ||
-        event.type === "thread.usage-limit-resume-cancelled" ||
-        event.type === "thread.usage-limit-resume-attempted"
-      ) {
-        return yield* worker.enqueue(event);
-      }
-    });
-
-    yield* forkParked(Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent));
+    yield* forkParked(
+      Stream.runForEach(Stream.fromPull(Effect.succeed(domainEventsPull)), processEvent),
+    );
     yield* Effect.forEach(
       pendingUsageLimitResumes,
       ({ threadId, resumeAt, attempt }) =>

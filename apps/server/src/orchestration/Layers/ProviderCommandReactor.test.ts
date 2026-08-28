@@ -150,6 +150,7 @@ describe("ProviderCommandReactor", () => {
     readonly requiresNewThreadForModelChange?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
+    readonly createSecondThread?: boolean;
     readonly usageLimitResumeAttemptedBeforeStart?: boolean;
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly stopSessionEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
@@ -470,7 +471,7 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
-    if (input?.titleRegenerationBeforeStart === "two") {
+    if (input?.titleRegenerationBeforeStart === "two" || input?.createSecondThread === true) {
       await Effect.runPromise(
         engine.dispatch({
           type: "thread.create",
@@ -696,6 +697,78 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.usageLimitResume?.nextAttemptAt).not.toBeNull();
   });
+
+  effectIt.effect("does not resume an attempted timer after the thread is settled", () =>
+    Effect.gen(function* () {
+      const blockedSessionStarted = yield* Deferred.make<void>();
+      const releaseBlockedSession = yield* Deferred.make<void>();
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          createSecondThread: true,
+          startSessionEffect: (session) =>
+            session.threadId === ThreadId.make("thread-2")
+              ? Deferred.succeed(blockedSessionStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseBlockedSession)),
+                  Effect.as(session),
+                )
+              : Effect.succeed(session),
+        }),
+      );
+      const resumeAt = "2099-01-01T00:00:00.000Z";
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-block-reactor-worker"),
+        threadId: ThreadId.make("thread-2"),
+        message: {
+          messageId: asMessageId("message-block-reactor-worker"),
+          role: "user",
+          text: "block the worker",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+      yield* Deferred.await(blockedSessionStarted);
+
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.schedule",
+        commandId: CommandId.make("cmd-settled-resume-schedule"),
+        threadId: ThreadId.make("thread-1"),
+        resumeAt,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.attempt",
+        commandId: CommandId.make("cmd-settled-resume-attempt"),
+        threadId: ThreadId.make("thread-1"),
+        expectedAttemptAt: resumeAt,
+        createdAt: resumeAt,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("cmd-settle-before-resume-processing"),
+        threadId: ThreadId.make("thread-1"),
+      });
+
+      yield* Deferred.succeed(releaseBlockedSession, undefined);
+      yield* Effect.promise(() => harness.drain());
+
+      expect(
+        harness.sendTurn.mock.calls.some(
+          ([input]) =>
+            typeof input === "object" &&
+            input !== null &&
+            "input" in input &&
+            input.input === "Continue from where you left off.",
+        ),
+      ).toBe(false);
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.settledOverride).toBe("settled");
+      expect(thread?.usageLimitResume).toBeNull();
+    }),
+  );
 
   effectIt.effect("projects starting before a slow provider session finishes", () =>
     Effect.gen(function* () {
