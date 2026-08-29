@@ -879,12 +879,12 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
-  effectIt.effect("retries a transient automatic-resume attempt dispatch failure", () =>
+  effectIt.effect("keeps retrying transient automatic-resume attempt dispatch failures", () =>
     Effect.gen(function* () {
       const resumeAt = DateTime.formatIso(DateTime.add(DateTime.nowUnsafe(), { seconds: 1 }));
       const harness = yield* Effect.promise(() =>
         createHarness({
-          usageLimitResumeAttemptDispatchFailures: 1,
+          usageLimitResumeAttemptDispatchFailures: 2,
           usageLimitResumeScheduledBeforeStart: resumeAt,
         }),
       );
@@ -892,7 +892,7 @@ describe("ProviderCommandReactor", () => {
       yield* harness.usageLimitResumeAttemptDispatched;
       yield* Effect.promise(() => harness.drain());
 
-      expect(harness.usageLimitResumeAttemptDispatchAttempts).toBe(2);
+      expect(harness.usageLimitResumeAttemptDispatchAttempts).toBe(3);
       const readModel = yield* Effect.promise(() => harness.readModel());
       const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
       expect(thread?.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });

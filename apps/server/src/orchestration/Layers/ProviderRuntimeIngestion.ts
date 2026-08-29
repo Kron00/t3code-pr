@@ -1958,12 +1958,10 @@ const make = Effect.gen(function* () {
         thread.usageLimitResume != null
       ) {
         const completedState = normalizeRuntimeTurnState(event.payload.state);
+        const resumeIsInFlight = thread.usageLimitResume.nextAttemptAt === null;
         const awaitsTrailingRuntimeError =
           completedState === "failed" && event.provider === ProviderDriverKind.make("opencode");
-        if (
-          completedState !== "failed" ||
-          (thread.usageLimitResume.nextAttemptAt === null && !awaitsTrailingRuntimeError)
-        ) {
+        if (resumeIsInFlight && (completedState !== "failed" || !awaitsTrailingRuntimeError)) {
           yield* orchestrationEngine.dispatch({
             type: "thread.usage-limit-resume.cancel",
             commandId: yield* providerCommandId(event, "usage-limit-resume-completed"),

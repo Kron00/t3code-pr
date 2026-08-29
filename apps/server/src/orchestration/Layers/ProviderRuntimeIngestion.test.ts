@@ -2882,6 +2882,35 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.usageLimitResume).toBeNull();
   });
 
+  it("keeps a scheduled resume when a delayed provider turn completes", async () => {
+    const harness = await createHarness();
+    const resumeAt = "2099-01-01T01:00:00.000Z";
+
+    await harness.markUsageLimited();
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.schedule",
+      commandId: CommandId.make("cmd-delayed-completion-resume-schedule"),
+      threadId: ThreadId.make("thread-1"),
+      resumeAt,
+    });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-delayed-provider-completion"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2099-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-before-scheduled-resume"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    );
+    expect(thread?.usageLimitResume).toEqual({ nextAttemptAt: resumeAt, attempt: 0 });
+  });
+
   it("clears automatic resume after an interrupted provider turn", async () => {
     const harness = await createHarness();
     const attemptedAt = "2099-01-01T00:00:00.000Z";

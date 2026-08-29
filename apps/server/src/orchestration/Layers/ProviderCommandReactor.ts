@@ -1269,9 +1269,7 @@ const make = Effect.gen(function* () {
       ),
       Effect.retry({
         while: isRetryableUsageLimitResumeDispatchError,
-        schedule: usageLimitResumeDispatchRetrySchedule().pipe(
-          Schedule.upTo({ duration: "10 minutes" }),
-        ),
+        schedule: usageLimitResumeDispatchRetrySchedule(),
       }),
     );
 
