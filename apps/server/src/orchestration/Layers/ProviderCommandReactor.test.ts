@@ -399,6 +399,7 @@ describe("ProviderCommandReactor", () => {
     const usageLimitResumeTransitionDispatchAttemptsByThread = new Map<ThreadId, number>();
     const usageLimitResumeAttemptObserved = Effect.runSync(Deferred.make<void>());
     const usageLimitResumeAttemptDispatched = Effect.runSync(Deferred.make<void>());
+    const usageLimitResumeTransitionAttemptObserved = Effect.runSync(Deferred.make<void>());
     const usageLimitResumeTransitionDispatched = Effect.runSync(Deferred.make<void>());
     const usageLimitResumeThread2TransitionDispatched = Effect.runSync(Deferred.make<void>());
     const reactorOrchestrationLayer = Layer.effect(
@@ -483,6 +484,10 @@ describe("ProviderCommandReactor", () => {
             ) {
               return Effect.suspend(() => {
                 usageLimitResumeTransitionDispatchAttempts += 1;
+                const markObserved = Deferred.succeed(
+                  usageLimitResumeTransitionAttemptObserved,
+                  undefined,
+                );
                 const threadAttempts =
                   (usageLimitResumeTransitionDispatchAttemptsByThread.get(command.threadId) ?? 0) +
                   1;
@@ -495,33 +500,36 @@ describe("ProviderCommandReactor", () => {
                   (failureThreadId === undefined || failureThreadId === command.threadId) &&
                   threadAttempts <= (input?.usageLimitResumeTransitionDispatchFailures ?? 0)
                 ) {
-                  return Effect.fail(
-                    new OrchestrationListenerCallbackError({
-                      listener: "domain-event",
-                      detail: "Injected usage-limit transition dispatch failure",
-                    }),
-                  );
-                }
-                return engine
-                  .dispatch(command)
-                  .pipe(
-                    Effect.tap(() =>
-                      Effect.all(
-                        [
-                          Deferred.succeed(usageLimitResumeTransitionDispatched, undefined),
-                          ...(command.threadId === ThreadId.make("thread-2")
-                            ? [
-                                Deferred.succeed(
-                                  usageLimitResumeThread2TransitionDispatched,
-                                  undefined,
-                                ),
-                              ]
-                            : []),
-                        ],
-                        { discard: true },
+                  return markObserved.pipe(
+                    Effect.andThen(
+                      Effect.fail(
+                        new OrchestrationListenerCallbackError({
+                          listener: "domain-event",
+                          detail: "Injected usage-limit transition dispatch failure",
+                        }),
                       ),
                     ),
                   );
+                }
+                return markObserved.pipe(
+                  Effect.andThen(engine.dispatch(command)),
+                  Effect.tap(() =>
+                    Effect.all(
+                      [
+                        Deferred.succeed(usageLimitResumeTransitionDispatched, undefined),
+                        ...(command.threadId === ThreadId.make("thread-2")
+                          ? [
+                              Deferred.succeed(
+                                usageLimitResumeThread2TransitionDispatched,
+                                undefined,
+                              ),
+                            ]
+                          : []),
+                      ],
+                      { discard: true },
+                    ),
+                  ),
+                );
               });
             }
             return engine.dispatch(command);
@@ -740,6 +748,9 @@ describe("ProviderCommandReactor", () => {
         usageLimitResumeTransitionDispatchAttemptsByThread.get(threadId) ?? 0,
       usageLimitResumeAttemptObserved: Deferred.await(usageLimitResumeAttemptObserved),
       usageLimitResumeAttemptDispatched: Deferred.await(usageLimitResumeAttemptDispatched),
+      usageLimitResumeTransitionAttemptObserved: Deferred.await(
+        usageLimitResumeTransitionAttemptObserved,
+      ),
       usageLimitResumeTransitionDispatched: Deferred.await(usageLimitResumeTransitionDispatched),
       usageLimitResumeThread2TransitionDispatched: Deferred.await(
         usageLimitResumeThread2TransitionDispatched,
@@ -1022,6 +1033,54 @@ describe("ProviderCommandReactor", () => {
         expect(thread?.usageLimitResume?.attempt).toBe(1);
         expect(thread?.usageLimitResume?.nextAttemptAt).not.toBeNull();
       }),
+  );
+
+  effectIt.effect("keeps the serial worker moving while a resume repair retries", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          startSessionEffect: () =>
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "grok",
+                method: "session/prompt",
+                detail: "Grok usage limit reached. Try again later.",
+              }),
+            ),
+          usageLimitResumeTransitionDispatchFailures: 1,
+        }),
+      );
+      const resumeAt = "2099-01-01T00:00:00.000Z";
+
+      yield* harness.markUsageLimited();
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.schedule",
+        commandId: CommandId.make("cmd-nonblocking-resume-schedule"),
+        threadId: ThreadId.make("thread-1"),
+        resumeAt,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.attempt",
+        commandId: CommandId.make("cmd-nonblocking-resume-attempt"),
+        threadId: ThreadId.make("thread-1"),
+        expectedAttemptAt: resumeAt,
+        createdAt: resumeAt,
+      });
+      yield* harness.usageLimitResumeTransitionAttemptObserved;
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-interrupt-during-resume-repair"),
+        threadId: ThreadId.make("thread-1"),
+        createdAt: "2099-01-01T00:00:01.000Z",
+      });
+      yield* Effect.promise(() => harness.drain());
+
+      expect(harness.interruptTurn.mock.calls).toContainEqual([
+        { threadId: ThreadId.make("thread-1") },
+      ]);
+      expect(harness.usageLimitResumeTransitionDispatchAttempts).toBe(1);
+    }),
   );
 
   effectIt.effect("retries an in-flight automatic resume repair after a server restart", () =>

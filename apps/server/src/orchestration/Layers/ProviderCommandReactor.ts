@@ -1442,7 +1442,9 @@ const make = Effect.gen(function* () {
       createdAt: event.occurredAt,
     }).pipe(
       Effect.map(Option.some),
-      Effect.catchCause((cause) => retryOrCancel(cause).pipe(Effect.as(Option.none()))),
+      Effect.catchCause((cause) =>
+        retryOrCancel(cause).pipe(Effect.forkScoped, Effect.as(Option.none())),
+      ),
     );
     if (Option.isNone(sendTurnRequest)) {
       return;
