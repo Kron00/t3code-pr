@@ -653,6 +653,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             updatedAt: occurredAt,
           },
         });
+        if (thread.usageLimitResume.nextAttemptAt === null) {
+          companionEvents.push({
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: command.threadId,
+              occurredAt,
+              commandId: command.commandId,
+            })),
+            type: "thread.turn-interrupt-requested",
+            payload: {
+              threadId: command.threadId,
+              createdAt: occurredAt,
+            },
+          });
+        }
       }
       return companionEvents.length > 0 ? [settledEvent, ...companionEvents] : settledEvent;
     }

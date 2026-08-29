@@ -270,6 +270,23 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
         "thread.usage-limit-resume-cancelled",
       ]);
 
+      const settledInFlight = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.settle",
+          commandId: CommandId.make("cmd-settle-in-flight"),
+          threadId: ThreadId.make("thread-1"),
+        },
+        readModel: makeReadModel({ nextAttemptAt: null, attempt: 0 }),
+      });
+      const settledInFlightEvents = Array.isArray(settledInFlight)
+        ? settledInFlight
+        : [settledInFlight];
+      expect(settledInFlightEvents.map((event) => event.type)).toEqual([
+        "thread.settled",
+        "thread.usage-limit-resume-cancelled",
+        "thread.turn-interrupt-requested",
+      ]);
+
       const attempted = yield* decideOrchestrationCommand({
         command: {
           type: "thread.usage-limit-resume.attempt",

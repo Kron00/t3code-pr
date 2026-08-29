@@ -1128,6 +1128,55 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
+  effectIt.effect("interrupts an in-flight automatic resume when the thread is settled", () =>
+    Effect.gen(function* () {
+      const resumeSendStarted = yield* Deferred.make<void>();
+      const releaseResumeSend = yield* Deferred.make<void>();
+      const threadId = ThreadId.make("thread-1");
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          sendTurnEffect: () =>
+            Deferred.succeed(resumeSendStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseResumeSend)),
+              Effect.as({ threadId, turnId: asTurnId("turn-resume-before-settle") }),
+            ),
+        }),
+      );
+      const resumeAt = "2099-01-01T00:00:00.000Z";
+
+      yield* harness.markUsageLimited();
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.schedule",
+        commandId: CommandId.make("cmd-settle-running-resume-schedule"),
+        threadId,
+        resumeAt,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.attempt",
+        commandId: CommandId.make("cmd-settle-running-resume-attempt"),
+        threadId,
+        expectedAttemptAt: resumeAt,
+        createdAt: resumeAt,
+      });
+      yield* Deferred.await(resumeSendStarted);
+      yield* harness.markUsageLimited();
+
+      yield* harness.engine.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("cmd-settle-running-resume"),
+        threadId,
+      });
+      yield* Effect.promise(() => harness.drain());
+
+      expect(harness.interruptTurn.mock.calls).toContainEqual([{ threadId }]);
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      expect(thread?.settledOverride).toBe("settled");
+      expect(thread?.usageLimitResume).toBeNull();
+      yield* Deferred.succeed(releaseResumeSend, undefined);
+    }),
+  );
+
   effectIt.effect("does not resume an attempted timer after the thread is settled", () =>
     Effect.gen(function* () {
       const blockedSessionStarted = yield* Deferred.make<void>();
