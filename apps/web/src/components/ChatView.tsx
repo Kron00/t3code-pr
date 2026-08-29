@@ -1332,6 +1332,9 @@ function ChatViewContent(props: ChatViewProps) {
     () => new Map(environments.map((environment) => [environment.environmentId, environment])),
     [environments],
   );
+  const supportsUsageLimitResume =
+    environmentById.get(environmentId)?.serverConfig?.environment.capabilities
+      .threadUsageLimitResume === true;
   const composerDraftTarget: ScopedThreadRef | DraftId =
     routeKind === "server" ? routeThreadRef : props.draftId;
   const draftThread = useComposerDraftStore((store) =>
@@ -1643,6 +1646,7 @@ function ChatViewContent(props: ChatViewProps) {
   const usageLimitResume = activeServerThread?.usageLimitResume ?? null;
   const isUsageLimitError = activeServerThread?.session?.lastErrorClass === "usage_limit";
   const canUseUsageLimitResume =
+    supportsUsageLimitResume &&
     activeServerThread?.archivedAt === null &&
     activeServerThread.deletedAt === null &&
     activeServerThread.settledOverride !== "settled";
@@ -1675,7 +1679,7 @@ function ChatViewContent(props: ChatViewProps) {
   >(() => new Set());
   const usageLimitActionPending = usageLimitActionPendingThreadKeys.has(routeThreadKey);
   const handleUsageLimitResumeAction = useCallback(async () => {
-    if (!isServerThread || usageLimitActionPending) {
+    if (!isServerThread || !canUseUsageLimitResume || usageLimitActionPending) {
       return;
     }
     const actionThreadKey = routeThreadKey;
@@ -1721,6 +1725,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
   }, [
     activeServerThread?.session?.retryAt,
+    canUseUsageLimitResume,
     cancelUsageLimitResume,
     environmentId,
     isServerThread,
