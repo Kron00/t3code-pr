@@ -300,6 +300,21 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
       const attemptedEvents = Array.isArray(attempted) ? attempted : [attempted];
       expect(attemptedEvents).toHaveLength(1);
       expect(attemptedEvents[0]?.type).toBe("thread.usage-limit-resume-cancelled");
+
+      const retried = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.usage-limit-resume.retry",
+          commandId: CommandId.make("cmd-settled-retry"),
+          threadId: ThreadId.make("thread-1"),
+          resumeAt: SECOND_ATTEMPT,
+          attempt: 0,
+          createdAt: FIRST_ATTEMPT,
+        },
+        readModel: makeReadModel({ nextAttemptAt: null, attempt: 0 }, "settled"),
+      });
+      const retriedEvents = Array.isArray(retried) ? retried : [retried];
+      expect(retriedEvents).toHaveLength(1);
+      expect(retriedEvents[0]?.type).toBe("thread.usage-limit-resume-cancelled");
     }),
   );
 

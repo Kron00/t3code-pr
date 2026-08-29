@@ -6,7 +6,10 @@ describe("initialUsageLimitResumeAt", () => {
   it("uses a future provider reset timestamp", () => {
     expect(
       initialUsageLimitResumeAt("2026-08-28T19:10:00.000Z", Date.parse("2026-08-28T18:00:00Z")),
-    ).toBe("2026-08-28T19:10:00.000Z");
+    ).toBe("2026-08-28T19:10:02.000Z");
+    expect(
+      initialUsageLimitResumeAt("2026-08-28T18:00:00.500Z", Date.parse("2026-08-28T18:00:00Z")),
+    ).toBe("2026-08-28T18:00:02.500Z");
   });
 
   it("falls back to five minutes when the provider has no future reset", () => {

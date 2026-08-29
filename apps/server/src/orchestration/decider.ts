@@ -850,7 +850,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (thread.deletedAt !== null || thread.archivedAt !== null) {
+      if (
+        thread.deletedAt !== null ||
+        thread.archivedAt !== null ||
+        thread.settledOverride === "settled"
+      ) {
         return {
           ...(yield* withEventBase({
             aggregateKind: "thread",

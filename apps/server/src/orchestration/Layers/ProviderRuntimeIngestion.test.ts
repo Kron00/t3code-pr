@@ -2819,6 +2819,25 @@ describe("ProviderRuntimeIngestion", () => {
       nextAttemptAt: "2099-01-01T01:00:02.000Z",
       attempt: 1,
     });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-runtime-usage-limit-failed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: attemptedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-usage-limit"),
+      payload: { state: "failed" },
+    });
+    await harness.drain();
+
+    const afterCompletion = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    );
+    expect(afterCompletion?.usageLimitResume).toEqual({
+      nextAttemptAt: "2099-01-01T01:00:02.000Z",
+      attempt: 1,
+    });
   });
 
   it("clears automatic resume after a successful provider turn", async () => {
@@ -2897,6 +2916,43 @@ describe("ProviderRuntimeIngestion", () => {
       (entry) => entry.usageLimitResume === null,
     );
     expect(thread.usageLimitResume).toBeNull();
+  });
+
+  it("clears an in-flight automatic resume after a failed turn without a runtime error", async () => {
+    const harness = await createHarness();
+    const attemptedAt = "2099-01-01T00:00:00.000Z";
+
+    await harness.markUsageLimited();
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.schedule",
+      commandId: CommandId.make("cmd-failed-resume-schedule"),
+      threadId: ThreadId.make("thread-1"),
+      resumeAt: attemptedAt,
+    });
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.attempt",
+      commandId: CommandId.make("cmd-failed-resume-attempt"),
+      threadId: ThreadId.make("thread-1"),
+      expectedAttemptAt: attemptedAt,
+      createdAt: attemptedAt,
+    });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-failed-auto-resume"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: attemptedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-failed-auto-resume"),
+      payload: { state: "failed" },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.usageLimitResume === null,
+    );
+    expect(thread.usageLimitResume).toBeNull();
+    expect(thread.session?.status).toBe("error");
   });
 
   it("keeps automatic resume active when a superseded turn completes", async () => {

@@ -1800,7 +1800,10 @@ const make = Effect.gen(function* () {
     const pendingUsageLimitResumes = yield* projectionSnapshotQuery.getCommandReadModel().pipe(
       Effect.map((readModel) =>
         readModel.threads.flatMap((thread) =>
-          thread.deletedAt !== null || thread.archivedAt !== null || thread.usageLimitResume == null
+          thread.deletedAt !== null ||
+          thread.archivedAt !== null ||
+          thread.settledOverride === "settled" ||
+          thread.usageLimitResume == null
             ? []
             : [
                 {

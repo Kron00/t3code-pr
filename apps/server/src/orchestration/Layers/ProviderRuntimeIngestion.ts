@@ -1954,14 +1954,16 @@ const make = Effect.gen(function* () {
       if (
         shouldApplyThreadLifecycle &&
         event.type === "turn.completed" &&
-        normalizeRuntimeTurnState(event.payload.state) !== "failed" &&
         thread.usageLimitResume != null
       ) {
-        yield* orchestrationEngine.dispatch({
-          type: "thread.usage-limit-resume.cancel",
-          commandId: yield* providerCommandId(event, "usage-limit-resume-completed"),
-          threadId: thread.id,
-        });
+        const completedState = normalizeRuntimeTurnState(event.payload.state);
+        if (completedState !== "failed" || thread.usageLimitResume.nextAttemptAt === null) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.usage-limit-resume.cancel",
+            commandId: yield* providerCommandId(event, "usage-limit-resume-completed"),
+            threadId: thread.id,
+          });
+        }
       }
 
       if (event.type === "thread.metadata.updated" && event.payload.name) {
