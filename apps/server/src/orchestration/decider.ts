@@ -802,6 +802,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (thread.deletedAt !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} is deleted and cannot schedule an automatic resume`,
+        });
+      }
       if (thread.settledOverride === "settled") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,

@@ -303,8 +303,19 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
     }),
   );
 
-  it.effect("rejects a timer after its thread is deleted", () =>
+  it.effect("rejects scheduling and timers after a thread is deleted", () =>
     Effect.gen(function* () {
+      const scheduleError = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.usage-limit-resume.schedule",
+          commandId: CommandId.make("cmd-deleted-schedule"),
+          threadId: ThreadId.make("thread-1"),
+          resumeAt: FIRST_ATTEMPT,
+        },
+        readModel: makeReadModel(null, null, null, NOW),
+      }).pipe(Effect.flip);
+      expect(scheduleError._tag).toBe("OrchestrationCommandInvariantError");
+
       const deleted = yield* decideOrchestrationCommand({
         command: {
           type: "thread.delete",
