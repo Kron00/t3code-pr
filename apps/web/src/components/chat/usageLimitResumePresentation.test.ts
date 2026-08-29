@@ -8,6 +8,7 @@ describe("resolveUsageLimitResumePresentation", () => {
       resolveUsageLimitResumePresentation({
         threadError: "Usage limit reached",
         visibleThreadError: "Usage limit reached",
+        threadErrorIsUsageLimit: true,
         hasScheduledResume: true,
       }),
     ).toEqual({
@@ -21,10 +22,25 @@ describe("resolveUsageLimitResumePresentation", () => {
       resolveUsageLimitResumePresentation({
         threadError: null,
         visibleThreadError: null,
+        threadErrorIsUsageLimit: false,
         hasScheduledResume: true,
       }),
     ).toEqual({
       errorBannerError: null,
+      showStatusBanner: true,
+    });
+  });
+
+  it("keeps unrelated local errors dismissible while showing the scheduled status", () => {
+    expect(
+      resolveUsageLimitResumePresentation({
+        threadError: "Script failed",
+        visibleThreadError: "Script failed",
+        threadErrorIsUsageLimit: false,
+        hasScheduledResume: true,
+      }),
+    ).toEqual({
+      errorBannerError: "Script failed",
       showStatusBanner: true,
     });
   });
@@ -34,6 +50,7 @@ describe("resolveUsageLimitResumePresentation", () => {
       resolveUsageLimitResumePresentation({
         threadError: "Provider failed",
         visibleThreadError: null,
+        threadErrorIsUsageLimit: false,
         hasScheduledResume: false,
       }),
     ).toEqual({

@@ -1,6 +1,7 @@
 export function resolveUsageLimitResumePresentation(input: {
   readonly threadError: string | null;
   readonly visibleThreadError: string | null;
+  readonly threadErrorIsUsageLimit: boolean;
   readonly hasScheduledResume: boolean;
 }): {
   readonly errorBannerError: string | null;
@@ -12,8 +13,14 @@ export function resolveUsageLimitResumePresentation(input: {
       showStatusBanner: false,
     };
   }
+  if (!input.threadErrorIsUsageLimit) {
+    return {
+      errorBannerError: input.visibleThreadError,
+      showStatusBanner: true,
+    };
+  }
   return {
     errorBannerError: input.threadError,
-    showStatusBanner: input.threadError === null,
+    showStatusBanner: false,
   };
 }
