@@ -9,6 +9,7 @@ describe("resolveUsageLimitResumePresentation", () => {
         threadError: "Usage limit reached",
         visibleThreadError: "Usage limit reached",
         threadErrorIsUsageLimit: true,
+        canUseUsageLimitResume: true,
         hasScheduledResume: true,
       }),
     ).toEqual({
@@ -23,6 +24,7 @@ describe("resolveUsageLimitResumePresentation", () => {
         threadError: null,
         visibleThreadError: null,
         threadErrorIsUsageLimit: false,
+        canUseUsageLimitResume: true,
         hasScheduledResume: true,
       }),
     ).toEqual({
@@ -37,11 +39,27 @@ describe("resolveUsageLimitResumePresentation", () => {
         threadError: "Script failed",
         visibleThreadError: "Script failed",
         threadErrorIsUsageLimit: false,
+        canUseUsageLimitResume: true,
         hasScheduledResume: true,
       }),
     ).toEqual({
       errorBannerError: "Script failed",
       showStatusBanner: true,
+    });
+  });
+
+  it("hides scheduled resume framing for a settled thread", () => {
+    expect(
+      resolveUsageLimitResumePresentation({
+        threadError: "Usage limit reached",
+        visibleThreadError: "Usage limit reached",
+        threadErrorIsUsageLimit: true,
+        canUseUsageLimitResume: false,
+        hasScheduledResume: true,
+      }),
+    ).toEqual({
+      errorBannerError: "Usage limit reached",
+      showStatusBanner: false,
     });
   });
 
@@ -51,6 +69,7 @@ describe("resolveUsageLimitResumePresentation", () => {
         threadError: "Provider failed",
         visibleThreadError: null,
         threadErrorIsUsageLimit: false,
+        canUseUsageLimitResume: true,
         hasScheduledResume: false,
       }),
     ).toEqual({

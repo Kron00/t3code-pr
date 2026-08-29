@@ -787,6 +787,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (thread.settledOverride === "settled") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} is settled and cannot schedule an automatic resume`,
+        });
+      }
       if (!isStoppedByUsageLimit(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,

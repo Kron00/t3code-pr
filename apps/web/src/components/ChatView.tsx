@@ -1642,6 +1642,7 @@ function ChatViewContent(props: ChatViewProps) {
   const [, setThreadErrorBannerDismissTick] = useState(0);
   const usageLimitResume = activeServerThread?.usageLimitResume ?? null;
   const isUsageLimitError = activeServerThread?.session?.lastErrorClass === "usage_limit";
+  const canUseUsageLimitResume = activeServerThread?.settledOverride !== "settled";
   const threadErrorIsUsageLimit =
     localServerError === null &&
     isUsageLimitError &&
@@ -1651,9 +1652,11 @@ function ChatViewContent(props: ChatViewProps) {
       threadError,
       visibleThreadError,
       threadErrorIsUsageLimit,
+      canUseUsageLimitResume,
       hasScheduledResume: usageLimitResume !== null,
     });
-  const showUsageLimitResumeErrorAction = displayedThreadError !== null && threadErrorIsUsageLimit;
+  const showUsageLimitResumeErrorAction =
+    displayedThreadError !== null && threadErrorIsUsageLimit && canUseUsageLimitResume;
   const usageLimitActionDescription =
     usageLimitResume?.nextAttemptAt === null
       ? "Trying again now. Cancel to stop further automatic retries."
@@ -7041,7 +7044,7 @@ function ChatViewContent(props: ChatViewProps) {
             showUsageLimitResumeErrorAction ? () => void handleUsageLimitResumeAction() : undefined
           }
           onDismiss={
-            usageLimitResume !== null && threadErrorIsUsageLimit
+            usageLimitResume !== null && showUsageLimitResumeErrorAction
               ? undefined
               : () => {
                   setThreadError(activeThread.id, null);

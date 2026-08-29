@@ -2,12 +2,13 @@ export function resolveUsageLimitResumePresentation(input: {
   readonly threadError: string | null;
   readonly visibleThreadError: string | null;
   readonly threadErrorIsUsageLimit: boolean;
+  readonly canUseUsageLimitResume: boolean;
   readonly hasScheduledResume: boolean;
 }): {
   readonly errorBannerError: string | null;
   readonly showStatusBanner: boolean;
 } {
-  if (!input.hasScheduledResume) {
+  if (!input.hasScheduledResume || !input.canUseUsageLimitResume) {
     return {
       errorBannerError: input.visibleThreadError,
       showStatusBanner: false,

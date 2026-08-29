@@ -245,6 +245,17 @@ it.layer(NodeServices.layer)("usage-limit resume decider", (it) => {
 
   it.effect("clears automatic resume on settlement and rejects a settled timer", () =>
     Effect.gen(function* () {
+      const scheduleError = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.usage-limit-resume.schedule",
+          commandId: CommandId.make("cmd-settled-schedule"),
+          threadId: ThreadId.make("thread-1"),
+          resumeAt: FIRST_ATTEMPT,
+        },
+        readModel: makeReadModel(null, "settled"),
+      }).pipe(Effect.flip);
+      expect(scheduleError._tag).toBe("OrchestrationCommandInvariantError");
+
       const settled = yield* decideOrchestrationCommand({
         command: {
           type: "thread.settle",

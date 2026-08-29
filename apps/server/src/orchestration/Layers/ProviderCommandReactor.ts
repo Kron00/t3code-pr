@@ -1805,6 +1805,7 @@ const make = Effect.gen(function* () {
                   threadId: thread.id,
                   resumeAt: thread.usageLimitResume.nextAttemptAt,
                   attempt: thread.usageLimitResume.attempt,
+                  providerRetryAt: thread.session?.retryAt,
                 },
               ],
         ),
@@ -1822,7 +1823,7 @@ const make = Effect.gen(function* () {
     );
     yield* Effect.forEach(
       pendingUsageLimitResumes,
-      ({ threadId, resumeAt, attempt }) =>
+      ({ threadId, resumeAt, attempt, providerRetryAt }) =>
         resumeAt !== null
           ? replaceUsageLimitResumeSchedule(threadId, resumeAt)
           : Effect.gen(function* () {
@@ -1831,7 +1832,11 @@ const make = Effect.gen(function* () {
                 type: "thread.usage-limit-resume.retry",
                 commandId: yield* serverCommandId("usage-limit-resume-recover"),
                 threadId,
-                resumeAt: nextUsageLimitRetryAt({ now: createdAt, attempt }),
+                resumeAt: nextUsageLimitRetryAt({
+                  now: createdAt,
+                  attempt,
+                  ...(providerRetryAt !== undefined ? { providerRetryAt } : {}),
+                }),
                 attempt,
                 createdAt,
               });

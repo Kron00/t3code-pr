@@ -161,6 +161,7 @@ describe("ProviderCommandReactor", () => {
     readonly usageLimitResumeScheduledBeforeStart?: string;
     readonly usageLimitResumeAttemptedBeforeStart?: boolean;
     readonly usageLimitResumeAttemptedSecondThreadBeforeStart?: boolean;
+    readonly usageLimitRetryAtBeforeStart?: string;
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly stopSessionEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
     readonly sendTurnEffect?: () => Effect.Effect<
@@ -584,6 +585,9 @@ describe("ProviderCommandReactor", () => {
           activeTurnId: null,
           lastError: "Usage limit reached",
           lastErrorClass: "usage_limit",
+          ...(input?.usageLimitRetryAtBeforeStart !== undefined
+            ? { retryAt: input.usageLimitRetryAtBeforeStart }
+            : {}),
           updatedAt: now,
         },
         createdAt: now,
@@ -1022,10 +1026,12 @@ describe("ProviderCommandReactor", () => {
 
   effectIt.effect("retries an in-flight automatic resume repair after a server restart", () =>
     Effect.gen(function* () {
+      const providerRetryAt = "2099-01-01T02:00:00.000Z";
       const harness = yield* Effect.promise(() =>
         createHarness({
           usageLimitResumeAttemptedBeforeStart: true,
           usageLimitResumeTransitionDispatchFailures: 1,
+          usageLimitRetryAtBeforeStart: providerRetryAt,
         }),
       );
       yield* harness.usageLimitResumeTransitionDispatched;
@@ -1034,7 +1040,7 @@ describe("ProviderCommandReactor", () => {
       const readModel = yield* Effect.promise(() => harness.readModel());
       const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
       expect(thread?.usageLimitResume?.attempt).toBe(1);
-      expect(thread?.usageLimitResume?.nextAttemptAt).not.toBeNull();
+      expect(thread?.usageLimitResume?.nextAttemptAt).toBe("2099-01-01T02:00:02.000Z");
     }),
   );
 
