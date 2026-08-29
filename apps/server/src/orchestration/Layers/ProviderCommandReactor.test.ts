@@ -832,6 +832,53 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });
   });
 
+  effectIt.effect("does not send a resume cancelled during provider preparation", () =>
+    Effect.gen(function* () {
+      const sessionStartEntered = yield* Deferred.make<void>();
+      const releaseSessionStart = yield* Deferred.make<void>();
+      const threadId = ThreadId.make("thread-1");
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          startSessionEffect: (session) =>
+            Deferred.succeed(sessionStartEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseSessionStart)),
+              Effect.as(session),
+            ),
+        }),
+      );
+      const resumeAt = "2099-01-01T00:00:00.000Z";
+
+      yield* harness.markUsageLimited();
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.schedule",
+        commandId: CommandId.make("cmd-cancel-preparing-resume-schedule"),
+        threadId,
+        resumeAt,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.attempt",
+        commandId: CommandId.make("cmd-cancel-preparing-resume-attempt"),
+        threadId,
+        expectedAttemptAt: resumeAt,
+        createdAt: resumeAt,
+      });
+      yield* Deferred.await(sessionStartEntered);
+
+      yield* harness.engine.dispatch({
+        type: "thread.usage-limit-resume.cancel",
+        commandId: CommandId.make("cmd-cancel-preparing-resume"),
+        threadId,
+      });
+      yield* Deferred.succeed(releaseSessionStart, undefined);
+      yield* Effect.promise(() => harness.drain());
+
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      const readModel = yield* Effect.promise(() => harness.readModel());
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      expect(thread?.usageLimitResume).toBeNull();
+    }),
+  );
+
   effectIt.effect("retries a transient automatic-resume attempt dispatch failure", () =>
     Effect.gen(function* () {
       const resumeAt = DateTime.formatIso(DateTime.add(DateTime.nowUnsafe(), { seconds: 1 }));
@@ -1103,7 +1150,7 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
-  effectIt.effect("continues startup repair after one thread persistently fails", () =>
+  effectIt.effect("keeps startup repairs independent and retries more than once", () =>
     Effect.gen(function* () {
       const thread1 = ThreadId.make("thread-1");
       const thread2 = ThreadId.make("thread-2");
@@ -1116,13 +1163,21 @@ describe("ProviderCommandReactor", () => {
         }),
       );
       yield* harness.usageLimitResumeThread2TransitionDispatched;
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const readModel = await harness.readModel();
+          const thread = readModel.threads.find((entry) => entry.id === thread1);
+          return thread?.usageLimitResume?.attempt === 1;
+        }),
+      );
 
-      expect(harness.usageLimitResumeTransitionDispatchAttemptsForThread(thread1)).toBe(2);
+      expect(harness.usageLimitResumeTransitionDispatchAttemptsForThread(thread1)).toBe(3);
       expect(harness.usageLimitResumeTransitionDispatchAttemptsForThread(thread2)).toBe(1);
       const readModel = yield* Effect.promise(() => harness.readModel());
-      const failedThread = readModel.threads.find((entry) => entry.id === thread1);
+      const recoveredThread1 = readModel.threads.find((entry) => entry.id === thread1);
       const recoveredThread = readModel.threads.find((entry) => entry.id === thread2);
-      expect(failedThread?.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });
+      expect(recoveredThread1?.usageLimitResume?.attempt).toBe(1);
+      expect(recoveredThread1?.usageLimitResume?.nextAttemptAt).not.toBeNull();
       expect(recoveredThread?.usageLimitResume?.attempt).toBe(1);
       expect(recoveredThread?.usageLimitResume?.nextAttemptAt).not.toBeNull();
     }),

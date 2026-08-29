@@ -2955,6 +2955,65 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.status).toBe("error");
   });
 
+  it("waits for OpenCode's runtime error after its failed completion", async () => {
+    const harness = await createHarness();
+    const attemptedAt = "2099-01-01T00:00:00.000Z";
+    const providerRetryAt = "2099-01-01T01:00:00.000Z";
+
+    await harness.markUsageLimited();
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.schedule",
+      commandId: CommandId.make("cmd-opencode-resume-schedule"),
+      threadId: ThreadId.make("thread-1"),
+      resumeAt: attemptedAt,
+    });
+    await harness.dispatch({
+      type: "thread.usage-limit-resume.attempt",
+      commandId: CommandId.make("cmd-opencode-resume-attempt"),
+      threadId: ThreadId.make("thread-1"),
+      expectedAttemptAt: attemptedAt,
+      createdAt: attemptedAt,
+    });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-opencode-resume-failed"),
+      provider: ProviderDriverKind.make("opencode"),
+      createdAt: attemptedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-opencode-resume"),
+      payload: { state: "failed" },
+    });
+    await harness.drain();
+
+    const afterCompletion = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    );
+    expect(afterCompletion?.usageLimitResume).toEqual({ nextAttemptAt: null, attempt: 0 });
+
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("evt-opencode-resume-usage-limit"),
+      provider: ProviderDriverKind.make("opencode"),
+      createdAt: attemptedAt,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        message: "OpenCode provider request failed.",
+        class: "usage_limit",
+        retryAt: providerRetryAt,
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.usageLimitResume?.nextAttemptAt !== null,
+    );
+    expect(thread.usageLimitResume).toEqual({
+      nextAttemptAt: "2099-01-01T01:00:02.000Z",
+      attempt: 1,
+    });
+  });
+
   it("keeps automatic resume active when a superseded turn completes", async () => {
     const harness = await createHarness();
     const attemptedAt = "2099-01-01T00:00:00.000Z";
