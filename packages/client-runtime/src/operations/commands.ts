@@ -6,6 +6,7 @@ import {
   CheckpointScopeId,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2CheckpointUnavailableError,
+  OrchestrationV2DelayedMessageUnsupportedError,
   WS_METHODS,
   type ChatAttachment,
   type MessageId,
@@ -174,6 +175,8 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly bootstrap?: StartThreadBootstrap;
   readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: PlanId };
   readonly dispatchMode?: "auto" | "queue" | "steer" | "restart" | "start";
+  /** Queue the message and send it this long after the server accepts it. */
+  readonly delayMs?: number;
 }
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
@@ -233,6 +236,10 @@ export interface CancelQueuedRunInput extends ThreadCommandInput {
   readonly runId: RunId;
 }
 
+export interface ReleaseQueuedRunInput extends ThreadCommandInput {
+  readonly runId: RunId;
+}
+
 export interface RetryWorkspacePreparationInput extends ThreadCommandInput {
   readonly runId: RunId;
 }
@@ -264,6 +271,13 @@ const dispatch = (command: OrchestrationV2Command) =>
 
 const getProjection = (threadId: ThreadId) =>
   request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, { threadId });
+
+const supportsDelayedMessages = Effect.fn("EnvironmentCommands.supportsDelayedMessages")(
+  function* () {
+    const config = yield* getInitialServerConfig();
+    return config.environment.capabilities.delayedMessages === true;
+  },
+);
 
 const supportsServerResolvedCommandContext = Effect.fn(
   "EnvironmentCommands.supportsServerResolvedCommandContext",
@@ -620,6 +634,23 @@ export const setThreadInteractionMode = Effect.fn("EnvironmentCommands.setThread
 export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(function* (
   input: StartThreadTurnInput,
 ) {
+  const bootstrap = input.bootstrap?.createThread;
+  const prepareWorktree = input.bootstrap?.prepareWorktree;
+  if (input.delayMs !== undefined) {
+    // Older servers strip delayMs and would send the message at once.
+    if (!(yield* supportsDelayedMessages())) {
+      return yield* new OrchestrationV2DelayedMessageUnsupportedError({
+        threadId: input.threadId,
+        reason: "server",
+      });
+    }
+    if (bootstrap !== undefined || prepareWorktree !== undefined) {
+      return yield* new OrchestrationV2DelayedMessageUnsupportedError({
+        threadId: input.threadId,
+        reason: "thread_launch",
+      });
+    }
+  }
   const commandId = yield* allocateCommandId(input);
   const attachments = yield* persistAttachments(
     input.threadId,
@@ -631,8 +662,6 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     input.message.attachments,
     attachments,
   );
-  const bootstrap = input.bootstrap?.createThread;
-  const prepareWorktree = input.bootstrap?.prepareWorktree;
   if (bootstrap !== undefined || prepareWorktree !== undefined) {
     const existingProjection =
       bootstrap === undefined ? yield* getProjection(input.threadId) : null;
@@ -677,6 +706,27 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
         ...(context ? { context } : {}),
         attachments,
       },
+    });
+  }
+
+  if (input.delayMs !== undefined) {
+    return yield* dispatch({
+      type: "message.dispatch",
+      commandId,
+      createdBy: "user",
+      creationSource: input.creationSource ?? "web",
+      threadId: input.threadId,
+      messageId: input.message.messageId,
+      text: input.message.text,
+      ...(context ? { context } : {}),
+      attachments,
+      ...(input.titleSeed === undefined ? {} : { titleSeed: input.titleSeed }),
+      ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+      ...(input.sourceProposedPlan === undefined
+        ? {}
+        : { sourcePlanRef: input.sourceProposedPlan }),
+      delayMs: input.delayMs,
+      dispatchMode: { type: "queue_after_active" },
     });
   }
 
@@ -1003,6 +1053,17 @@ export const cancelQueuedRun = Effect.fn("EnvironmentCommands.cancelQueuedRun")(
 ) {
   return yield* dispatch({
     type: "queued-run.cancel",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    runId: input.runId,
+  });
+});
+
+export const releaseQueuedRun = Effect.fn("EnvironmentCommands.releaseQueuedRun")(function* (
+  input: ReleaseQueuedRunInput,
+) {
+  return yield* dispatch({
+    type: "queued-run.release",
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     runId: input.runId,

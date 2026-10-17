@@ -22,8 +22,18 @@ vi.mock("../../state/threads", () => ({
   threadEnvironment: {
     cancelQueuedRun: Symbol("cancelQueuedRun"),
     promoteQueuedRun: Symbol("promoteQueuedRun"),
+    releaseQueuedRun: Symbol("releaseQueuedRun"),
     reorderQueuedRun: Symbol("reorderQueuedRun"),
   },
+}));
+
+vi.mock("../../state/session", () => ({
+  useEnvironmentScope: () => true,
+}));
+
+vi.mock("../../hooks/useSettings", () => ({
+  useClientSettings: (select: (settings: { timestampFormat: "locale" }) => unknown) =>
+    select({ timestampFormat: "locale" }),
 }));
 
 vi.mock("../../state/use-atom-command", () => ({

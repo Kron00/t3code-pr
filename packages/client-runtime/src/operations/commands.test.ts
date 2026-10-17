@@ -79,6 +79,7 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly projection?: OrchestrationV2ThreadProjection;
   readonly projectionRequests?: ThreadId[];
   readonly advertiseServerResolvedCommandContext?: boolean;
+  readonly advertiseDelayedMessages?: boolean;
 }) {
   const client = {
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
@@ -129,6 +130,7 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
           ...(input.advertiseServerResolvedCommandContext === false
             ? {}
             : { serverResolvedCommandContext: true }),
+          ...(input.advertiseDelayedMessages === true ? { delayedMessages: true } : {}),
         },
       },
     } as never),
@@ -399,6 +401,78 @@ describe("V2 environment commands", () => {
           startFromOrigin: true,
         },
       });
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("schedules a send only on a server that holds it until its time", () =>
+    Effect.gen(function* () {
+      const message = {
+        messageId: MessageId.make("message-later"),
+        role: "user" as const,
+        text: "Later",
+        attachments: [],
+      };
+      const turn = {
+        commandId: CommandId.make("command-later"),
+        threadId: v2ThreadId,
+        message,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        dispatchMode: "start" as const,
+        delayMs: 5 * 60_000,
+      };
+
+      // An older server would strip delayMs and send the message at once.
+      const oldCommands: OrchestrationV2Command[] = [];
+      const oldServer = yield* makeSupervisor({ commands: oldCommands, projects: [] });
+      const refused = yield* startThreadTurn(turn).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, oldServer),
+        Effect.flip,
+      );
+      expect(refused).toMatchObject({
+        _tag: "OrchestrationV2DelayedMessageUnsupportedError",
+        reason: "server",
+      });
+      expect(oldCommands).toEqual([]);
+
+      const commands: OrchestrationV2Command[] = [];
+      const launches: OrchestrationV2ThreadLaunchInput[] = [];
+      const supervisor = yield* makeSupervisor({
+        commands,
+        projects: [],
+        launches,
+        advertiseDelayedMessages: true,
+      });
+      yield* startThreadTurn(turn).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      );
+      expect(commands).toEqual([
+        expect.objectContaining({
+          type: "message.dispatch",
+          messageId: "message-later",
+          delayMs: 5 * 60_000,
+          dispatchMode: { type: "queue_after_active" },
+        }),
+      ]);
+      expect(commands[0]).not.toHaveProperty("deliveryIntent");
+
+      const launch = yield* startThreadTurn({
+        ...turn,
+        bootstrap: {
+          prepareWorktree: {
+            projectCwd: "/workspace/project",
+            baseBranch: "main",
+            branch: "feature",
+            startFromOrigin: true,
+          },
+        },
+      }).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.flip,
+      );
+      expect(launch).toMatchObject({ reason: "thread_launch" });
+      expect(launches).toEqual([]);
+      expect(commands).toHaveLength(1);
     }).pipe(Effect.provide(layerTestCrypto)),
   );
 
