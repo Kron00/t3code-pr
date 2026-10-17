@@ -6066,6 +6066,12 @@ export default function ChatView(props: ChatViewProps) {
       !composerHasNonPromptContent &&
       isUsageLimitsCommand(promptRef.current)
     ) {
+      if (delayMs !== undefined) {
+        if (activeThread) {
+          setThreadError(activeThread.id, "Send later is not available for this message.");
+        }
+        return;
+      }
       if (openUsageLimits()) {
         promptRef.current = "";
         setComposerDraftPrompt(composerDraftTarget, "");
