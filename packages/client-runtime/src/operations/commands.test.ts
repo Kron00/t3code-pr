@@ -19,6 +19,8 @@ import {
   type OrchestrationV2Command,
   type OrchestrationV2ThreadLaunchInput,
   type OrchestrationV2ThreadProjection,
+  type PersistChatAttachmentsInput,
+  type PersistChatAttachmentsResult,
   type ProjectMutation,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -80,6 +82,10 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly projectionRequests?: ThreadId[];
   readonly advertiseServerResolvedCommandContext?: boolean;
   readonly advertiseDelayedMessages?: boolean;
+  readonly persistChatAttachments?: (
+    input: PersistChatAttachmentsInput,
+  ) => Effect.Effect<PersistChatAttachmentsResult>;
+  readonly onInitialConfig?: Effect.Effect<void>;
 }) {
   const client = {
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
@@ -103,6 +109,7 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
           resumed: false,
         };
       }),
+    [WS_METHODS.assetsPersistChatAttachments]: input.persistChatAttachments,
     [WS_METHODS.projectsMutate]: (mutation: ProjectMutation) =>
       Effect.sync(() => {
         input.projects.push(mutation);
@@ -123,17 +130,20 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   } as unknown as WsRpcProtocolClient;
   const session: RpcSession.RpcSession = {
     client,
-    initialConfig: Effect.succeed({
-      environment: {
-        capabilities: {
-          repositoryIdentity: true,
-          ...(input.advertiseServerResolvedCommandContext === false
-            ? {}
-            : { serverResolvedCommandContext: true }),
-          ...(input.advertiseDelayedMessages === true ? { delayedMessages: true } : {}),
+    initialConfig: Effect.andThen(
+      input.onInitialConfig ?? Effect.void,
+      Effect.succeed({
+        environment: {
+          capabilities: {
+            repositoryIdentity: true,
+            ...(input.advertiseServerResolvedCommandContext === false
+              ? {}
+              : { serverResolvedCommandContext: true }),
+            ...(input.advertiseDelayedMessages === true ? { delayedMessages: true } : {}),
+          },
         },
-      },
-    } as never),
+      } as never),
+    ),
     subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
@@ -473,6 +483,91 @@ describe("V2 environment commands", () => {
       expect(launch).toMatchObject({ reason: "thread_launch" });
       expect(launches).toEqual([]);
       expect(commands).toHaveLength(1);
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("sends a scheduled message only on the session that advertised delayed sends", () =>
+    Effect.gen(function* () {
+      const upload = {
+        id: "upload-1",
+        type: "image" as const,
+        name: "screen.png",
+        mimeType: "image/png",
+        sizeBytes: 3,
+        dataUrl: "data:image/png;base64,AAAA",
+      };
+      const stored = {
+        id: "stored-1",
+        type: "image" as const,
+        name: "screen.png",
+        mimeType: "image/png",
+        sizeBytes: 3,
+      };
+      const turn = {
+        commandId: CommandId.make("command-later"),
+        threadId: v2ThreadId,
+        message: {
+          messageId: MessageId.make("message-later"),
+          role: "user" as const,
+          text: "Later",
+          attachments: [upload],
+        },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        delayMs: 5 * 60_000,
+      };
+      const oldCommands: OrchestrationV2Command[] = [];
+      const oldServer = yield* makeSupervisor({ commands: oldCommands, projects: [] });
+      const oldSession = yield* SubscriptionRef.get(oldServer.session);
+
+      // The environment reconnects to an older server while the upload is in flight.
+      const commands: OrchestrationV2Command[] = [];
+      const reconnecting: EnvironmentSupervisor.EnvironmentSupervisor["Service"] =
+        yield* makeSupervisor({
+          commands,
+          projects: [],
+          advertiseDelayedMessages: true,
+          persistChatAttachments: () =>
+            SubscriptionRef.set(reconnecting.session, oldSession).pipe(
+              Effect.as({ attachments: [stored] }),
+            ),
+        });
+      const refused = yield* startThreadTurn(turn).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, reconnecting),
+        Effect.flip,
+      );
+      expect(refused).toMatchObject({
+        _tag: "OrchestrationV2DelayedMessageUnsupportedError",
+        reason: "server",
+      });
+      expect(oldCommands).toEqual([]);
+      expect(commands).toEqual([]);
+
+      // A reconnect during the session's own capability read must not move the send either.
+      let configReads = 0;
+      const swapping: EnvironmentSupervisor.EnvironmentSupervisor["Service"] =
+        yield* makeSupervisor({
+          commands,
+          projects: [],
+          advertiseDelayedMessages: true,
+          persistChatAttachments: () => Effect.succeed({ attachments: [stored] }),
+          onInitialConfig: Effect.suspend(() =>
+            ++configReads === 2 ? SubscriptionRef.set(swapping.session, oldSession) : Effect.void,
+          ),
+        });
+      yield* startThreadTurn(turn).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, swapping),
+      );
+      expect(configReads).toBe(2);
+      expect(oldCommands).toEqual([]);
+      expect(commands).toEqual([
+        expect.objectContaining({
+          type: "message.dispatch",
+          messageId: "message-later",
+          attachments: [stored],
+          delayMs: 5 * 60_000,
+        }),
+      ]);
     }).pipe(Effect.provide(layerTestCrypto)),
   );
 

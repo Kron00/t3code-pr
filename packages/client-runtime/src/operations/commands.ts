@@ -24,6 +24,7 @@ import {
   type RunId,
   type RuntimeMode,
   type RuntimeRequestId,
+  type ServerConfig,
   type ThreadId,
   type ThreadEnvMode,
   type UploadChatAttachment,
@@ -266,18 +267,21 @@ const allocateCommandId = Effect.fn("EnvironmentCommands.allocateCommandId")(fun
   return CommandId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
 });
 
-const dispatch = (command: OrchestrationV2Command) =>
-  request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command);
+const dispatch = <E = never>(
+  command: OrchestrationV2Command,
+  requireConfig?: (config: ServerConfig) => Effect.Effect<void, E>,
+) => request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command, requireConfig);
 
 const getProjection = (threadId: ThreadId) =>
   request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, { threadId });
 
-const supportsDelayedMessages = Effect.fn("EnvironmentCommands.supportsDelayedMessages")(
-  function* () {
-    const config = yield* getInitialServerConfig();
-    return config.environment.capabilities.delayedMessages === true;
-  },
-);
+// Older servers strip delayMs and would send the message at once.
+const requireDelayedMessages = (threadId: ThreadId) => (config: ServerConfig) =>
+  config.environment.capabilities.delayedMessages === true
+    ? Effect.void
+    : Effect.fail(
+        new OrchestrationV2DelayedMessageUnsupportedError({ threadId, reason: "server" }),
+      );
 
 const supportsServerResolvedCommandContext = Effect.fn(
   "EnvironmentCommands.supportsServerResolvedCommandContext",
@@ -637,13 +641,8 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   const bootstrap = input.bootstrap?.createThread;
   const prepareWorktree = input.bootstrap?.prepareWorktree;
   if (input.delayMs !== undefined) {
-    // Older servers strip delayMs and would send the message at once.
-    if (!(yield* supportsDelayedMessages())) {
-      return yield* new OrchestrationV2DelayedMessageUnsupportedError({
-        threadId: input.threadId,
-        reason: "server",
-      });
-    }
+    // Fails fast before uploading attachments; dispatch re-checks on the session that sends it.
+    yield* getInitialServerConfig().pipe(Effect.flatMap(requireDelayedMessages(input.threadId)));
     if (bootstrap !== undefined || prepareWorktree !== undefined) {
       return yield* new OrchestrationV2DelayedMessageUnsupportedError({
         threadId: input.threadId,
@@ -710,24 +709,27 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   }
 
   if (input.delayMs !== undefined) {
-    return yield* dispatch({
-      type: "message.dispatch",
-      commandId,
-      createdBy: "user",
-      creationSource: input.creationSource ?? "web",
-      threadId: input.threadId,
-      messageId: input.message.messageId,
-      text: input.message.text,
-      ...(context ? { context } : {}),
-      attachments,
-      ...(input.titleSeed === undefined ? {} : { titleSeed: input.titleSeed }),
-      ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
-      ...(input.sourceProposedPlan === undefined
-        ? {}
-        : { sourcePlanRef: input.sourceProposedPlan }),
-      delayMs: input.delayMs,
-      dispatchMode: { type: "queue_after_active" },
-    });
+    return yield* dispatch(
+      {
+        type: "message.dispatch",
+        commandId,
+        createdBy: "user",
+        creationSource: input.creationSource ?? "web",
+        threadId: input.threadId,
+        messageId: input.message.messageId,
+        text: input.message.text,
+        ...(context ? { context } : {}),
+        attachments,
+        ...(input.titleSeed === undefined ? {} : { titleSeed: input.titleSeed }),
+        ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+        ...(input.sourceProposedPlan === undefined
+          ? {}
+          : { sourcePlanRef: input.sourceProposedPlan }),
+        delayMs: input.delayMs,
+        dispatchMode: { type: "queue_after_active" },
+      },
+      requireDelayedMessages(input.threadId),
+    );
   }
 
   const requestedMode = input.dispatchMode ?? "auto";
