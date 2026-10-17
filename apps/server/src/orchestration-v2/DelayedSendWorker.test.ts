@@ -5,6 +5,7 @@ import {
   EventId,
   MessageId,
   NodeId,
+  PlanId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -505,6 +506,72 @@ it.effect("refuses to schedule a steer, and archiving cancels a scheduled send",
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("refuses to schedule a plan implementation without touching the plan", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread:delayed-plan");
+    const planId = PlanId.make("plan:delayed-plan");
+    yield* createThread(threadId);
+    yield* ProjectionStore.ProjectionStoreV2.use((store) =>
+      Effect.gen(function* () {
+        yield* store.apply({
+          id: EventId.make("plan:delayed-plan"),
+          type: "plan.updated",
+          threadId,
+          occurredAt: yield* DateTime.now,
+          payload: {
+            id: planId,
+            threadId,
+            runId: null,
+            nodeId: NodeId.make("node:delayed-plan"),
+            kind: "proposed_plan",
+            status: "active",
+            markdown: "# Plan\n\n1. Do the thing.",
+          },
+        });
+      }),
+    );
+    const implement = (key: string, delayMs?: number) =>
+      dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`implement:${key}`),
+        threadId,
+        messageId: MessageId.make(`message:delayed-plan:${key}`),
+        text: "Implement the plan.",
+        attachments: [],
+        sourcePlanRef: { threadId, planId },
+        dispatchMode: { type: "start_immediately" },
+        ...(delayMs === undefined ? {} : { delayMs }),
+        createdBy: "user",
+        creationSource: "web",
+      });
+    const planStatus = ProjectionStore.ProjectionStoreV2.use((store) =>
+      store.getPlan(threadId, planId),
+    ).pipe(Effect.map((plan) => plan?.status));
+    const before = yield* latestSequence(threadId);
+
+    // Queueing completes the plan, so a cancelled scheduled send would strand it as done.
+    const refused = yield* implement("later", FIVE_MINUTES_MS).pipe(Effect.flip);
+    assert.equal(refused._tag, "OrchestratorDispatchError");
+    assert.equal(yield* latestSequence(threadId), before);
+    const untouched = yield* Orchestrator.OrchestratorV2.use((orchestrator) =>
+      orchestrator.getThreadProjection(threadId),
+    );
+    assert.isEmpty(untouched.runs);
+    assert.isEmpty(untouched.messages);
+    assert.equal(yield* planStatus, "active");
+
+    yield* implement("now");
+    const started = yield* Orchestrator.OrchestratorV2.use((orchestrator) =>
+      orchestrator.getThreadProjection(threadId),
+    );
+    assert.deepEqual(
+      started.runs.map((run) => [run.userMessageId, run.status]),
+      [[MessageId.make("message:delayed-plan:now"), "starting"]],
+    );
+    assert.equal(yield* planStatus, "completed");
+  }).pipe(Effect.provide(layerTest)),
+);
+
 const storageCases = (["sqlite", "memory"] as const).map((storage) => ({
   storage,
   storeLayer:
@@ -669,12 +736,27 @@ it.effect.each(storageCases)(
         [[threadId, dueRunId]],
       );
       assert.isFalse(yield* store.canStartQueuedRun(threadId));
-      const waiting = yield* store.getThreadShell(threadId);
-      assert.equal(waiting?.status, "cancelled");
-      assert.equal(
-        DateTime.toEpochMillis(waiting!.latestUserMessageAt!),
-        DateTime.toEpochMillis(now) - 180_000,
-      );
+      const userMessageTimes = Effect.gen(function* () {
+        const shell = (yield* store.getThreadShell(threadId))!;
+        const [candidate] = yield* store.getSettlementCandidates(threadId);
+        assert.isDefined(candidate);
+        const millis = (at: DateTime.Utc | null | undefined) =>
+          DateTime.toEpochMillis(at!) - DateTime.toEpochMillis(now);
+        return {
+          status: shell.status,
+          shell: [millis(shell.latestUserMessageAt), millis(shell.latestUserAuthoredMessageAt)],
+          settlement: [
+            millis(candidate!.latestUserMessageAt),
+            millis(candidate!.latestUserAuthoredMessageAt),
+          ],
+        };
+      });
+      // Settlement must not count a message the user has not sent yet as recent activity.
+      assert.deepEqual(yield* userMessageTimes, {
+        status: "cancelled",
+        shell: [-180_000, -180_000],
+        settlement: [-180_000, -180_000],
+      });
 
       const due = events.find(
         (event): event is Extract<OrchestrationV2DomainEvent, { readonly type: "run.created" }> =>
@@ -690,11 +772,10 @@ it.effect.each(storageCases)(
       });
       assert.isEmpty(yield* store.getDueScheduledRuns(now));
       assert.isTrue(yield* store.canStartQueuedRun(threadId));
-      const releasedShell = yield* store.getThreadShell(threadId);
-      assert.equal(releasedShell?.status, "queued");
-      assert.equal(
-        DateTime.toEpochMillis(releasedShell!.latestUserMessageAt!),
-        DateTime.toEpochMillis(now),
-      );
+      assert.deepEqual(yield* userMessageTimes, {
+        status: "queued",
+        shell: [0, 0],
+        settlement: [0, 0],
+      });
     }).pipe(Effect.provide(storeLayer)),
 );

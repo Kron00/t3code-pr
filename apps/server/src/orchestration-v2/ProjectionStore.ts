@@ -5429,6 +5429,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 WHERE message.thread_id = t.thread_id
                   AND message.role = 'user'
                   AND json_extract(message.payload_json, '$.createdBy') = 'user'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM orchestration_v2_projection_runs scheduled
+                    WHERE scheduled.run_id = message.run_id
+                      AND scheduled.status = 'queued'
+                      AND json_extract(scheduled.payload_json, '$.releaseAt') IS NOT NULL
+                  )
                 ORDER BY message.updated_at DESC, message.message_id DESC
                 LIMIT 1
               ) AS latest_user_authored_message_at,
@@ -5669,6 +5675,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 FROM orchestration_v2_projection_messages message
                 WHERE message.thread_id = t.thread_id AND message.role = 'user'
                   AND json_extract(message.payload_json, '$.createdBy') = 'user'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM orchestration_v2_projection_runs scheduled
+                    WHERE scheduled.run_id = message.run_id
+                      AND scheduled.status = 'queued'
+                      AND json_extract(scheduled.payload_json, '$.releaseAt') IS NOT NULL
+                  )
                 ORDER BY message.updated_at DESC, message.message_id DESC
                 LIMIT 1
               ) AS latest_user_authored_message_at

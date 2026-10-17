@@ -730,6 +730,10 @@ function scheduledDispatchUnsupportedReason(
   ) {
     return "Automatic deliveries cannot be scheduled.";
   }
+  // Queueing completes the source plan, so canceling a scheduled send would strand it.
+  if (command.sourcePlanRef !== undefined) {
+    return "Plan implementations cannot be scheduled.";
+  }
   // Queued starts do not consume fork or merge-back context.
   if (
     pendingForkTransferForThread(projection) !== undefined ||
