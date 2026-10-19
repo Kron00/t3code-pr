@@ -5213,8 +5213,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const attemptId = idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 });
         const rootNodeId = idAllocator.derive.rootNode({ runId });
         // Without a run to queue behind, the start resolves the scope against
-        // the workspace as it is at send time.
+        // the workspace as it is at send time. A scheduled send defers it too:
+        // the thread can move to another worktree before it is released.
         const checkpointScope =
+          scheduled ||
           queueBehindRun === undefined ||
           queueBehindRun.status === "preparing" ||
           worktreeMissingRun !== undefined

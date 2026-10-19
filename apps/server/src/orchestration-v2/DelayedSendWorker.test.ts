@@ -328,6 +328,58 @@ it.effect("Send now releases a scheduled message, and a release that lost a race
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("a scheduled send checkpoints the workspace the thread has when it starts", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const moveWorktree = (threadId: ThreadId, worktreePath: string) =>
+      dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make(`move:${threadId}:${worktreePath}`),
+        threadId,
+        worktreePath,
+      });
+    const checkpointCwd = (threadId: ThreadId, run: OrchestrationV2Run) =>
+      orchestrator.getThreadProjection(threadId).pipe(
+        Effect.map((projection) => {
+          const scopeId = projection.nodes.find(
+            (node) => node.id === run.rootNodeId,
+          )?.checkpointScopeId;
+          return projection.checkpointScopes.find((scope) => scope.id === scopeId)?.cwd ?? null;
+        }),
+      );
+
+    // A message queued normally still pins its scope when it is sent.
+    const queuedThreadId = ThreadId.make("thread:delayed-scope-queued");
+    yield* createThread(queuedThreadId);
+    yield* moveWorktree(queuedThreadId, "/worktrees/before");
+    yield* send(queuedThreadId, "now", { mode: "start_immediately" });
+    const queued = yield* send(queuedThreadId, "next");
+    assert.equal(yield* checkpointCwd(queuedThreadId, queued), "/worktrees/before");
+
+    const threadId = ThreadId.make("thread:delayed-scope");
+    yield* createThread(threadId);
+    yield* moveWorktree(threadId, "/worktrees/before");
+    const active = yield* send(threadId, "now", { mode: "start_immediately" });
+    const scheduled = yield* send(threadId, "later", { delayMs: FIVE_MINUTES_MS });
+    assert.isNull(yield* checkpointCwd(threadId, scheduled));
+
+    const beforeInterrupt = yield* latestSequence(threadId);
+    yield* dispatch({
+      type: "run.interrupt",
+      commandId: CommandId.make("interrupt:delayed-scope"),
+      threadId,
+      runId: active.id,
+    });
+    assert.equal(yield* firstRunToReach(threadId, "interrupted", beforeInterrupt), active.id);
+    yield* moveWorktree(threadId, "/worktrees/after");
+
+    yield* TestClock.adjust(FIVE_MINUTES_MS);
+    yield* sweep;
+    assert.equal((yield* runOf(threadId, scheduled.id)).status, "starting");
+    assert.equal(yield* checkpointCwd(threadId, scheduled), "/worktrees/after");
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("a due release that failed to read the thread is retried by the next sweep", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
