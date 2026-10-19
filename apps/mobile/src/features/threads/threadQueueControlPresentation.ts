@@ -1,4 +1,5 @@
 import type { EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
+import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import * as DateTime from "effect/DateTime";
 
 export const REMOVE_QUEUED_MESSAGE_ACCESSIBILITY_LABEL = "Remove queued message";
@@ -45,7 +46,8 @@ export function resolveThreadQueueRowControls(input: {
     // Steering would send a delayed message before the time it was scheduled for.
     canSteer: mutationEnabled && input.canPromoteToSteer && !isEditing && releaseAt === null,
     dismissAccessibilityLabel: REMOVE_QUEUED_MESSAGE_ACCESSIBILITY_LABEL,
-    displayText: input.text,
+    // Edit and Steer keep the original text so quoted citations stay linked.
+    displayText: assistantCitationsToPlainText(input.text),
     isEditing,
     releaseLabel:
       releaseAt === null || Number.isNaN(releaseAt.getTime())
