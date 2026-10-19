@@ -7127,7 +7127,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       title: child.title,
       completionWake: "always",
       completionDelivery: { state: "pending", observedByRunId: null },
-      status: run.status === "queued" ? (run.queueHeld === true ? "idle" : "pending") : "running",
+      status:
+        run.status === "queued"
+          ? run.queueHeld === true || run.releaseAt !== undefined
+            ? "idle"
+            : "pending"
+          : "running",
       progress: undefined,
       result: null,
       startedAt: now,
@@ -10441,7 +10446,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const task = options.task;
         const status: OrchestrationV2Subagent["status"] =
           childRun.status === "queued"
-            ? childRun.queueHeld === true
+            ? childRun.queueHeld === true || childRun.releaseAt !== undefined
               ? "idle"
               : "pending"
             : childRun.status === "waiting"

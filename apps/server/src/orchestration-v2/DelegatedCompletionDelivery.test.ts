@@ -1194,6 +1194,219 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
       }),
     );
 
+    it.effect("keeps a scheduled follow-up card idle until its release", () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const parentThreadId = ThreadId.make("thread:scheduled-followup-parent");
+        const projectId = ProjectId.make("project:scheduled-followup");
+        const parentRunId = RunId.make("run:scheduled-followup-parent");
+        const rootNodeId = NodeId.make("node:scheduled-followup-parent");
+        yield* seedParentWithTerminalTask({
+          threadId: parentThreadId,
+          projectId,
+          runId: parentRunId,
+          rootNodeId,
+          taskId: NodeId.make("node:scheduled-followup-seed"),
+          deliveryState: "acknowledged",
+          now,
+        });
+        const seedChild = (name: string) =>
+          seedRestartCancelledChild({
+            parentThreadId,
+            projectId,
+            parentRunId,
+            rootNodeId,
+            name,
+            completionWake: "always",
+            continuationPending: false,
+            runStatus: "completed",
+            now,
+          });
+        const child = yield* seedChild("scheduled-followup-child");
+        const barrierChild = yield* seedChild("scheduled-followup-barrier");
+        yield* orchestrator.recoverDelegatedTasks;
+        // Pending background work is only listed once the parent's own turn settles.
+        const parentRun = (yield* orchestrator.getThreadProjection(parentThreadId)).runs.find(
+          (run) => run.id === parentRunId,
+        )!;
+        yield* eventSink.write({
+          commandId: reconcileCommandId("scheduled-followup-parent-finished"),
+          events: [
+            {
+              id: EventId.make("event:scheduled-followup-parent-finished"),
+              type: "run.updated",
+              threadId: parentThreadId,
+              runId: parentRunId,
+              occurredAt: now,
+              payload: { ...parentRun, status: "completed", completedAt: now },
+            },
+          ],
+        });
+        // Run updates react in sequence, so once a later follow-up's result
+        // reaches the parent, every earlier status sync has been applied.
+        let barriers = 0;
+        const drainRunReactions = Effect.gen(function* () {
+          barriers += 1;
+          const messageId = MessageId.make(`message:scheduled-followup-barrier:${barriers}`);
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "agent",
+            creationSource: "mcp",
+            commandId: CommandId.make(`command:scheduled-followup-barrier:${barriers}`),
+            threadId: barrierChild.childThreadId,
+            senderThreadId: parentThreadId,
+            messageId,
+            text: "Barrier",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+          });
+          const run = (yield* orchestrator.getThreadProjection(
+            barrierChild.childThreadId,
+          )).runs.find((row) => row.userMessageId === messageId)!;
+          const afterSequence = yield* eventSink.latestSequence();
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make(`event:scheduled-followup-barrier:${barriers}`),
+                type: "run.updated",
+                threadId: barrierChild.childThreadId,
+                runId: run.id,
+                occurredAt: now,
+                payload: { ...run, status: "completed", startedAt: now, completedAt: now },
+              },
+            ],
+          });
+          yield* eventSink.stream({ afterSequence, eventType: "subagent.updated" }).pipe(
+            Stream.filter(
+              (stored) =>
+                stored.event.type === "subagent.updated" &&
+                stored.event.payload.id === run.delegatedTaskId &&
+                stored.event.payload.result !== null,
+            ),
+            Stream.take(1),
+            Stream.runHead,
+          );
+        });
+        const messageId = MessageId.make("message:scheduled-followup");
+        const scheduling = yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("command:scheduled-followup"),
+          threadId: child.childThreadId,
+          messageId,
+          text: "Check again later.",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          delayMs: 60_000,
+        });
+        const scheduledRun = () =>
+          orchestrator
+            .getThreadProjection(child.childThreadId)
+            .pipe(
+              Effect.map((projection) =>
+                projection.runs.find((run) => run.userMessageId === messageId)!,
+              ),
+            );
+        const scheduled = yield* scheduledRun();
+        assert.isDefined(scheduled.releaseAt);
+        assert.isDefined(scheduled.delegatedTaskId);
+        const taskId = scheduled.delegatedTaskId!;
+        // The card is committed with the send, before any run-update reaction.
+        assert.deepEqual(
+          scheduling.storedEvents.flatMap(({ event }) =>
+            (event.type === "subagent.updated" && event.payload.id === taskId) ||
+            (event.type === "node.updated" && event.payload.id === taskId) ||
+            (event.type === "turn-item.updated" && event.nodeId === taskId)
+              ? [event.payload.status]
+              : [],
+          ),
+          ["idle", "idle", "idle"],
+        );
+        const assertCard = (status: string, inBackground: boolean) =>
+          Effect.gen(function* () {
+            const parent = yield* orchestrator.getThreadProjection(parentThreadId);
+            assert.equal(parent.subagents.find((row) => row.id === taskId)?.status, status);
+            assert.equal(parent.nodes.find((row) => row.id === taskId)?.status, status);
+            assert.equal(
+              parent.turnItems.find((row) => row.type === "subagent" && row.subagentId === taskId)
+                ?.status,
+              status,
+            );
+            const shell = (yield* orchestrator.getShellSnapshot()).threads.find(
+              (row) => row.id === parentThreadId,
+            )!;
+            assert.equal(
+              (shell.pendingBackgroundTasks ?? []).some(
+                (row) => row.kind === "subagent" && row.childThreadId === child.childThreadId,
+              ),
+              inBackground,
+            );
+          });
+        yield* drainRunReactions;
+        yield* assertCard("idle", false);
+
+        // Resuming a stopped queue before the send is due must not surface it as pending work.
+        yield* orchestrator.dispatch({
+          type: "thread.stop",
+          threadId: child.childThreadId,
+          commandId: CommandId.make("command:scheduled-followup:stop"),
+        });
+        yield* orchestrator.dispatch({
+          type: "queue.resume",
+          threadId: child.childThreadId,
+          commandId: CommandId.make("command:scheduled-followup:resume-early"),
+        });
+        const resumedEarly = yield* scheduledRun();
+        assert.equal(resumedEarly.status, "queued");
+        assert.notEqual(resumedEarly.queueHeld, true);
+        assert.isDefined(resumedEarly.releaseAt);
+        yield* drainRunReactions;
+        yield* assertCard("idle", false);
+
+        // Send now on a stopped queue only clears the schedule; the hold keeps it idle.
+        yield* orchestrator.dispatch({
+          type: "thread.stop",
+          threadId: child.childThreadId,
+          commandId: CommandId.make("command:scheduled-followup:stop-again"),
+        });
+        yield* orchestrator.dispatch({
+          type: "queued-run.release",
+          threadId: child.childThreadId,
+          runId: scheduled.id,
+          commandId: CommandId.make("command:scheduled-followup:release"),
+        });
+        const released = yield* scheduledRun();
+        assert.equal(released.status, "queued");
+        assert.equal(released.queueHeld, true);
+        assert.isUndefined(released.releaseAt);
+        yield* drainRunReactions;
+        yield* assertCard("idle", false);
+
+        const startSequence = yield* eventSink.latestSequence();
+        yield* orchestrator.dispatch({
+          type: "queue.resume",
+          threadId: child.childThreadId,
+          commandId: CommandId.make("command:scheduled-followup:resume"),
+        });
+        yield* eventSink
+          .stream({ afterSequence: startSequence, eventType: "subagent.updated" })
+          .pipe(
+            Stream.filter(
+              (stored) =>
+                stored.event.type === "subagent.updated" &&
+                stored.event.payload.id === taskId &&
+                stored.event.payload.status === "running",
+            ),
+            Stream.take(1),
+            Stream.runHead,
+          );
+        yield* assertCard("running", true);
+      }),
+    );
+
     const outcomes = [
       "completed",
       "failed",
