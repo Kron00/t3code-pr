@@ -434,6 +434,63 @@ it.effect("a stopped queue keeps a due scheduled send until the user resumes it"
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("scheduling into a stopped queue keeps it held until the user sends a message", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const threadId = ThreadId.make("thread:delayed-held-send");
+    yield* createThread(threadId);
+    yield* send(threadId, "now", { mode: "start_immediately" });
+    const first = yield* send(threadId, "first", { delayMs: FIVE_MINUTES_MS });
+    yield* dispatch({
+      type: "thread.stop",
+      commandId: CommandId.make("stop:delayed-held-send"),
+      threadId,
+    });
+
+    // Choosing a time is not the user coming back to the stopped queue.
+    const second = yield* send(threadId, "second", { delayMs: FIVE_MINUTES_MS });
+    const releaseAt = schedule(second).releaseAt;
+    assert.deepEqual(schedule(second), { status: "queued", releaseAt, held: true });
+    assert.isTrue((yield* runOf(threadId, first.id)).queueHeld);
+    assert.isNull((yield* orchestrator.getThreadShell(threadId))?.activeRunId);
+
+    yield* dispatch({
+      type: "queued-run.release",
+      commandId: CommandId.make("release:delayed-held-send"),
+      threadId,
+      runId: second.id,
+    });
+    yield* TestClock.adjust(FIVE_MINUTES_MS);
+    yield* sweep;
+    for (const run of [first, second]) {
+      assert.deepEqual(schedule(yield* runOf(threadId, run.id)), {
+        status: "queued",
+        releaseAt: null,
+        held: true,
+      });
+    }
+
+    // A message sent right away resumes the queue, which follows it in order.
+    const back = yield* send(threadId, "back", { mode: "start_immediately" });
+    assert.equal(back.status, "starting");
+    for (const run of [first, second]) {
+      assert.deepEqual(schedule(yield* runOf(threadId, run.id)), {
+        status: "queued",
+        releaseAt: null,
+        held: false,
+      });
+    }
+    const beforeInterrupt = yield* latestSequence(threadId);
+    yield* dispatch({
+      type: "run.interrupt",
+      commandId: CommandId.make("interrupt:delayed-held-send"),
+      threadId,
+      runId: back.id,
+    });
+    assert.equal(yield* firstRunToReach(threadId, "starting", beforeInterrupt), first.id);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("a restart holds scheduled sends, and resuming before their time does not send", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
