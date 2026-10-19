@@ -361,7 +361,9 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                 >
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel={title}
+                    accessibilityLabel={
+                      controls.releaseLabel === null ? title : `${title}, ${controls.releaseLabel}`
+                    }
                     accessibilityHint="Opens this message in the composer for editing"
                     disabled={!controls.canEdit}
                     onPress={() => void act(run.id, "edit")}
