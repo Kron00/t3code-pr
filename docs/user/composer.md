@@ -238,6 +238,13 @@ resume it or send a message right away. Scheduling another message keeps the
 queue held. Mobile shows when a scheduled message sends and can edit or remove
 it.
 
+Before you [move to an older version](./background-service.md#manage-the-service)
+without Send later, or run one on the same T3 home, let scheduled messages send
+or remove them, then stop the server. Stopping or restarting first is not
+enough: an older version treats scheduled messages as ordinary queued work.
+Resuming the queue or sending a new message can run them early, and updating
+again may not restore their scheduled times.
+
 ## Commands and skills
 
 Type `/` for commands or `$` to add a skill from the selected environment and
