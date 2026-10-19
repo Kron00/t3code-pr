@@ -23,6 +23,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -324,6 +325,74 @@ it.effect("Send now releases a scheduled message, and a release that lost a race
       runId: idleScheduled.id,
     });
     assert.equal((yield* runOf(idleThreadId, idleScheduled.id)).status, "starting");
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("a due release that failed to read the thread is retried by the next sweep", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+    const sink = yield* EventSink.EventSinkV2;
+    const threadId = ThreadId.make("thread:delayed-read-failure");
+    yield* createThread(threadId);
+    const scheduled = yield* send(threadId, "later", { delayMs: FIVE_MINUTES_MS });
+    const releaseAt = schedule(scheduled).releaseAt;
+    const releaseId = CommandId.make(`scheduled-release:${scheduled.id}:${releaseAt}`);
+    yield* TestClock.adjust(FIVE_MINUTES_MS);
+
+    // The due query reads only thread ids and lifecycle columns, so hiding the
+    // thread payload fails the release's projection read and nothing else.
+    yield* sql`ALTER TABLE orchestration_v2_projection_threads RENAME COLUMN payload_json TO payload_json_unreadable`;
+    yield* sweep;
+    yield* sql`ALTER TABLE orchestration_v2_projection_threads RENAME COLUMN payload_json_unreadable TO payload_json`;
+    assert.deepEqual(schedule(yield* runOf(threadId, scheduled.id)), {
+      status: "queued",
+      releaseAt,
+      held: false,
+    });
+    assert.isTrue(Option.isNone(yield* receipts.getByCommandId(releaseId)));
+
+    yield* sweep;
+    assert.deepEqual(schedule(yield* runOf(threadId, scheduled.id)), {
+      status: "starting",
+      releaseAt: null,
+      held: false,
+    });
+    const releaseEvents = yield* sink.readByCommandId({ commandId: releaseId }).pipe(
+      Stream.runCollect,
+      Effect.map((events) => Array.from(events)),
+    );
+    assert.lengthOf(releaseEvents, 1);
+
+    // Replaying the release changes nothing.
+    const sequence = yield* latestSequence(threadId);
+    const replayed = yield* dispatch({
+      type: "queued-run.release",
+      commandId: releaseId,
+      threadId,
+      runId: scheduled.id,
+    });
+    assert.deepEqual(
+      replayed.storedEvents.map((stored) => stored.sequence),
+      releaseEvents.map((stored) => stored.sequence),
+    );
+    assert.equal(yield* latestSequence(threadId), sequence);
+
+    // A release the thread itself refuses stays rejected.
+    const unknownRelease = {
+      type: "queued-run.release",
+      commandId: CommandId.make("release:delayed-read-failure:unknown"),
+      threadId,
+      runId: RunId.make("run:delayed-read-failure:unknown"),
+    } as const;
+    assert.equal(
+      (yield* dispatch(unknownRelease).pipe(Effect.flip))._tag,
+      "OrchestratorDispatchError",
+    );
+    assert.equal(
+      (yield* dispatch(unknownRelease).pipe(Effect.flip))._tag,
+      "OrchestratorCommandPreviouslyRejectedError",
+    );
   }).pipe(Effect.provide(layerTest)),
 );
 

@@ -11430,6 +11430,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Effect.catch((cause) =>
         Effect.gen(function* () {
           if (cause._tag === "OrchestratorThreadAboveModeLimitError") return yield* cause;
+          // A failed read decided nothing, and the due sweep retries a release
+          // under the same id; a rejected receipt would keep it scheduled forever.
+          if (command.type === "queued-run.release" && cause._tag === "OrchestratorProjectionError")
+            return yield* cause;
           const rejectedAt = yield* DateTime.now;
           const receipt = yield* eventSink
             .commitRejectedCommand({
