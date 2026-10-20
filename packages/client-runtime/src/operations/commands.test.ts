@@ -442,8 +442,9 @@ describe("V2 environment commands", () => {
         Effect.flip,
       );
       expect(refused).toMatchObject({
-        _tag: "OrchestrationV2DelayedMessageUnsupportedError",
-        reason: "server",
+        _tag: "OrchestrationV2DelayedMessageServerUnsupportedError",
+        threadId: v2ThreadId,
+        message: "This environment cannot schedule messages. Update it to send later.",
       });
       expect(oldCommands).toEqual([]);
 
@@ -482,7 +483,11 @@ describe("V2 environment commands", () => {
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
         Effect.flip,
       );
-      expect(launch).toMatchObject({ reason: "thread_launch" });
+      expect(launch).toMatchObject({
+        _tag: "OrchestrationV2DelayedMessageThreadLaunchUnsupportedError",
+        threadId: v2ThreadId,
+        message: "The first message of a new thread or worktree cannot be scheduled.",
+      });
       expect(launches).toEqual([]);
       expect(commands).toHaveLength(1);
     }).pipe(Effect.provide(layerTestCrypto)),
@@ -539,8 +544,9 @@ describe("V2 environment commands", () => {
         Effect.flip,
       );
       expect(refused).toMatchObject({
-        _tag: "OrchestrationV2DelayedMessageUnsupportedError",
-        reason: "server",
+        _tag: "OrchestrationV2DelayedMessageServerUnsupportedError",
+        threadId: v2ThreadId,
+        message: "This environment cannot schedule messages. Update it to send later.",
       });
       expect(oldCommands).toEqual([]);
       expect(commands).toEqual([]);

@@ -1219,17 +1219,25 @@ export class OrchestrationV2CheckpointUnavailableError extends Schema.TaggedErro
   }
 }
 
-export class OrchestrationV2DelayedMessageUnsupportedError extends Schema.TaggedError<OrchestrationV2DelayedMessageUnsupportedError>()(
-  "OrchestrationV2DelayedMessageUnsupportedError",
+export class OrchestrationV2DelayedMessageServerUnsupportedError extends Schema.TaggedError<OrchestrationV2DelayedMessageServerUnsupportedError>()(
+  "OrchestrationV2DelayedMessageServerUnsupportedError",
   {
     threadId: ThreadId,
-    reason: Schema.Literals(["server", "thread_launch"]),
   },
 ) {
   override get message(): string {
-    return this.reason === "server"
-      ? "This environment cannot schedule messages. Update it to send later."
-      : "The first message of a new thread or worktree cannot be scheduled.";
+    return "This environment cannot schedule messages. Update it to send later.";
+  }
+}
+
+export class OrchestrationV2DelayedMessageThreadLaunchUnsupportedError extends Schema.TaggedError<OrchestrationV2DelayedMessageThreadLaunchUnsupportedError>()(
+  "OrchestrationV2DelayedMessageThreadLaunchUnsupportedError",
+  {
+    threadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return "The first message of a new thread or worktree cannot be scheduled.";
   }
 }
 

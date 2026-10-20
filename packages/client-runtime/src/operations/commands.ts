@@ -6,7 +6,8 @@ import {
   CheckpointScopeId,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2CheckpointUnavailableError,
-  OrchestrationV2DelayedMessageUnsupportedError,
+  OrchestrationV2DelayedMessageServerUnsupportedError,
+  OrchestrationV2DelayedMessageThreadLaunchUnsupportedError,
   WS_METHODS,
   type ChatAttachment,
   type MessageId,
@@ -279,9 +280,7 @@ const getProjection = (threadId: ThreadId) =>
 const requireDelayedMessages = (threadId: ThreadId) => (config: ServerConfig) =>
   config.environment.capabilities.delayedMessages === true
     ? Effect.void
-    : Effect.fail(
-        new OrchestrationV2DelayedMessageUnsupportedError({ threadId, reason: "server" }),
-      );
+    : Effect.fail(new OrchestrationV2DelayedMessageServerUnsupportedError({ threadId }));
 
 const supportsServerResolvedCommandContext = Effect.fn(
   "EnvironmentCommands.supportsServerResolvedCommandContext",
@@ -644,9 +643,8 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     // Fails fast before uploading attachments; dispatch re-checks on the session that sends it.
     yield* getInitialServerConfig().pipe(Effect.flatMap(requireDelayedMessages(input.threadId)));
     if (bootstrap !== undefined || prepareWorktree !== undefined) {
-      return yield* new OrchestrationV2DelayedMessageUnsupportedError({
+      return yield* new OrchestrationV2DelayedMessageThreadLaunchUnsupportedError({
         threadId: input.threadId,
-        reason: "thread_launch",
       });
     }
   }
