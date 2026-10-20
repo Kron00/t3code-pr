@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { ComposerHandleContext } from "~/composerHandleContext";
 import { render, type Screen } from "../../../test/render";
@@ -34,13 +34,12 @@ async function renderControl() {
 }
 
 const trigger = (view: Screen) =>
-  view.container.querySelector<HTMLButtonElement>('[aria-label="Send later"]')!;
-const popover = () => document.querySelector<HTMLElement>('[role="dialog"]');
+  view.getByRole("button", { name: "Send later", exact: true }).element() as HTMLButtonElement;
+const popover = () => page.getByRole("dialog", { name: "Send later", exact: true });
 const button = (name: string) =>
-  [...(popover()?.querySelectorAll("button") ?? [])].find(
-    (element) => element.textContent?.trim() === name,
-  )!;
-const minutesInput = () => popover()!.querySelector<HTMLInputElement>("input")!;
+  popover().getByRole("button", { name, exact: true }).element() as HTMLButtonElement;
+const minutesInput = () =>
+  popover().getByRole("textbox", { name: "minutes", exact: true }).element() as HTMLInputElement;
 
 async function openCustom(view: Screen) {
   await userEvent.click(trigger(view));
@@ -49,7 +48,7 @@ async function openCustom(view: Screen) {
 
 async function expectClosed(view: Screen) {
   expect(trigger(view).getAttribute("aria-expanded")).toBe("false");
-  await vi.waitFor(() => expect(popover()).toBeNull());
+  await vi.waitFor(() => expect(popover().query()).toBeNull());
 }
 
 describe("SendLaterControl", () => {
@@ -68,7 +67,7 @@ describe("SendLaterControl", () => {
   it("opens Custom inline at 10 minutes, focused, without scheduling", async () => {
     await using view = await renderControl();
     await userEvent.click(trigger(view));
-    expect(popover()!.querySelector("input")).toBeNull();
+    expect(popover().getByRole("textbox").query()).toBeNull();
 
     await userEvent.click(button("Custom…"));
 
@@ -86,7 +85,7 @@ describe("SendLaterControl", () => {
       await userEvent.keyboard("{Enter}");
       expect(minutesInput().getAttribute("aria-invalid")).toBe("true");
     }
-    expect(popover()!.textContent).toContain("Enter a whole number from 1–60.");
+    expect(popover().element().textContent).toContain("Enter a whole number from 1–60.");
     expect(view.onSendLater).not.toHaveBeenCalled();
 
     await userEvent.fill(minutesInput(), "60");
@@ -128,7 +127,7 @@ describe("SendLaterControl", () => {
 
     expect(button("In 1 minute").disabled).toBe(true);
     expect(button("Schedule").disabled).toBe(true);
-    expect(popover()!.querySelector('[role="status"]')?.textContent).toContain(
+    expect(popover().getByRole("status").element().textContent).toContain(
       "Your message stays in the composer.",
     );
     // The field keeps Enter, but the held send must not go out.
