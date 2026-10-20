@@ -319,9 +319,7 @@ it("previews assistant quotes as readable text and preserves the citation when e
     .element(page.getByText(`${quotedText} Why per worktree?`, { exact: true }))
     .toBeVisible();
 
-  await act(async () => {
-    await page.getByRole("button", { name: "Edit queued message", exact: true }).nth(1).click();
-  });
+  await page.getByRole("button", { name: "Edit queued message", exact: true }).nth(1).click();
   expect(onEditQueuedRun).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ text: quoteAndText }),
   );

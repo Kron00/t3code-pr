@@ -24,7 +24,7 @@ async function renderControl() {
       </form>
     </ComposerHandleContext>
   );
-  const screen = await render(ui(true), { router: false });
+  const screen = await render(ui(true));
   return Object.assign(screen, {
     onSendLater,
     onComposerSubmit,
