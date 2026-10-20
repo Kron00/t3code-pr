@@ -127,6 +127,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   serverResolvedCommandContext: Schema.optionalKey(Schema.Boolean),
   /** Older servers strip `delayMs` and would send a scheduled message at once. */
   delayedMessages: Schema.optionalKey(Schema.Boolean),
+  threadStop: Schema.optionalKey(Schema.Boolean),
   threadPullRequests: Schema.optionalKey(Schema.Boolean),
   threadPullRequestWatch: Schema.optionalKey(Schema.Boolean),
   pullRequestStackActions: Schema.optionalKey(Schema.Boolean),
